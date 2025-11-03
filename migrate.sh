@@ -46,9 +46,19 @@ fi
 
 echo -e "${BLUE}✓ Using psql: $PSQL${NC}"
 
-# Run migration
+# Run migrations in order
 echo -e "${BLUE}🔄 Running migration: 001_persistence_schema.sql${NC}"
 $PSQL "$DATABASE_URL" -f migrations/001_persistence_schema.sql
+
+if [ $? -eq 0 ]; then
+  echo -e "${GREEN}✅ Migration 001 completed${NC}"
+else
+  echo -e "${RED}❌ Migration 001 failed${NC}"
+  exit 1
+fi
+
+echo -e "${BLUE}🔄 Running migration: 002_add_invoice_reminder.sql${NC}"
+$PSQL "$DATABASE_URL" -f migrations/002_add_invoice_reminder.sql
 
 if [ $? -eq 0 ]; then
   echo -e "${GREEN}✅ Migration completed successfully!${NC}"
