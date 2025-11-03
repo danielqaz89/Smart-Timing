@@ -54,9 +54,17 @@ app.post("/api/logs",async(req,r)=>{
   );
   r.json(res.rows[0]);
 });
-app.delete("/api/logs/:id",async(req,r)=>{
-  await pool.query("DELETE FROM log_row WHERE id=$1",[req.params.id]);
-  r.json({success:true});
+app.delete("/api/logs/:id", async (req, res) => {
+  await pool.query("DELETE FROM log_row WHERE id=$1", [req.params.id]);
+  res.json({ success: true });
 });
-const PORT=process.env.PORT||4000;
-initTables().then(()=>app.listen(PORT,()=>console.log(`🚀 Backend running on http://localhost:${PORT}`)));
+
+// ✅ Add this health-check route
+app.get("/api/test", (req, res) => {
+  res.json({ ok: true, message: "Smart Timing backend is working" });
+});
+
+const PORT = process.env.PORT || 4000;
+initTables().then(() =>
+  app.listen(PORT, () => console.log(`🚀 Backend running on http://localhost:${PORT}`))
+);
