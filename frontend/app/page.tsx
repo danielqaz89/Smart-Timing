@@ -46,6 +46,9 @@ import CloseIcon from "@mui/icons-material/Close";
 import dayjs from "dayjs";
 import { API_BASE, createLog, deleteLog, fetchLogs, createLogsBulk, webhookTestRelay, deleteLogsMonth, deleteLogsAll, updateLog, sendTimesheet, type LogRow } from "../lib/api";
 import { exportToPDF } from "../lib/pdfExport";
+import { useThemeMode } from "../components/ThemeRegistry";
+import Brightness4Icon from "@mui/icons-material/Brightness4";
+import Brightness7Icon from "@mui/icons-material/Brightness7";
 
 // Locale-safe helpers for Timesats input (Norwegian)
 const nbFormatter = new Intl.NumberFormat('nb-NO', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -462,6 +465,8 @@ export default function Home() {
   const [manualPlace, setManualPlace] = useState("");
   const [manualNotes, setManualNotes] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [bulkMode, setBulkMode] = useState(false);
 
   // Detect active stamp (today's entry with same start/end time)
   const activeStamp = useMemo(() => {
@@ -601,6 +606,32 @@ export default function Home() {
         <Button color="secondary" size="small" onClick={async () => { await handleUndo(); closeSnackbar(key as any); }}>Angre</Button>
       )
     } as any);
+  }
+
+  async function handleBulkDelete() {
+    if (!confirm(`Sikker på at du vil slette ${selectedIds.size} rader?`)) return;
+    for (const id of selectedIds) {
+      await deleteLog(id);
+    }
+    await mutate();
+    showToast(`${selectedIds.size} rader slettet`, "success");
+    setSelectedIds(new Set());
+    setBulkMode(false);
+  }
+
+  function toggleSelection(id: string) {
+    const newSet = new Set(selectedIds);
+    if (newSet.has(id)) newSet.delete(id);
+    else newSet.add(id);
+    setSelectedIds(newSet);
+  }
+
+  function selectAll() {
+    setSelectedIds(new Set(logs.map(l => l.id)));
+  }
+
+  function deselectAll() {
+    setSelectedIds(new Set());
   }
 
   const parentRef = useMemo(() => ({ current: null as any }), []);
@@ -751,6 +782,9 @@ export default function Home() {
       <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mb: 2 }}>
         <Typography variant="h4">Smart Stempling</Typography>
         <Stack direction="row" spacing={1}>
+          <IconButton onClick={useThemeMode().toggleMode} size="small" title="Bytt tema">
+            {useThemeMode().mode === 'dark' ? <Brightness7Icon /> : <Brightness4Icon />}
+          </IconButton>
           <Link href="/reports" passHref legacyBehavior>
             <Button 
               variant="outlined" 
@@ -1087,29 +1121,59 @@ export default function Home() {
           <CardHeader 
             title={`Logg for ${monthNav}`}
             action={
-              <Button 
-                variant="outlined" 
-                size="small" 
-                onClick={() => exportToPDF(allLogs, monthNav, projectInfo, settings)}
-                disabled={allLogs.length === 0}
-              >
-                Eksporter PDF
-              </Button>
+              <Stack direction="row" spacing={1}>
+                {bulkMode && selectedIds.size > 0 && (
+                  <Button 
+                    variant="contained" 
+                    color="error"
+                    size="small" 
+                    onClick={handleBulkDelete}
+                  >
+                    Slett {selectedIds.size}
+                  </Button>
+                )}
+                <Button 
+                  variant="outlined" 
+                  size="small" 
+                  onClick={() => {
+                    setBulkMode(!bulkMode);
+                    setSelectedIds(new Set());
+                  }}
+                >
+                  {bulkMode ? 'Avbryt' : 'Velg flere'}
+                </Button>
+                <Button 
+                  variant="outlined" 
+                  size="small" 
+                  onClick={() => exportToPDF(allLogs, monthNav, projectInfo, settings)}
+                  disabled={allLogs.length === 0}
+                >
+                  Eksporter PDF
+                </Button>
+              </Stack>
             }
           />
           <CardContent>
-            <TextField 
-              placeholder="Søk i logger (tittel, prosjekt, sted, notater, aktivitet)..."
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              fullWidth
-              size="small"
-              sx={{ mb: 2 }}
-            />
+            <Stack direction="row" spacing={2} sx={{ mb: 2 }} alignItems="center">
+              <TextField 
+                placeholder="Søk i logger (tittel, prosjekt, sted, notater, aktivitet)..."
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                fullWidth
+                size="small"
+              />
+              {bulkMode && (
+                <Stack direction="row" spacing={1}>
+                  <Button size="small" onClick={selectAll}>Velg alle</Button>
+                  <Button size="small" onClick={deselectAll}>Fjern alle</Button>
+                </Stack>
+              )}
+            </Stack>
             <div style={{ height: 360, overflow: 'auto' }} ref={parentRef}>
               <Table size="small" sx={{ minWidth: 900 }}>
                 <TableHead>
                 <TableRow>
+                  {bulkMode && <TableCell padding="checkbox" />}
                   <TableCell>Dato</TableCell>
                   <TableCell>Inn</TableCell>
                   <TableCell>Ut</TableCell>
@@ -1130,8 +1194,19 @@ export default function Home() {
                     return (
                       <div key={r.id} style={{ position: 'absolute', top: vi.start, left: 0, right: 0 }}>
                         <TableRow hover>
+                          {bulkMode && editingId !== r.id && (
+                            <TableCell padding="checkbox">
+                              <input 
+                                type="checkbox" 
+                                checked={selectedIds.has(r.id)} 
+                                onChange={() => toggleSelection(r.id)}
+                                style={{ cursor: 'pointer' }}
+                              />
+                            </TableCell>
+                          )}
                           {editingId === r.id ? (
                             <>
+                              {bulkMode && <TableCell />}
                               <TableCell><TextField type="date" value={editForm.date} onChange={(e)=>setEditForm({...editForm, date: e.target.value})} size="small" /></TableCell>
                               <TableCell><TextField type="time" value={editForm.start} onChange={(e)=>setEditForm({...editForm, start: e.target.value})} size="small" /></TableCell>
                               <TableCell><TextField type="time" value={editForm.end} onChange={(e)=>setEditForm({...editForm, end: e.target.value})} size="small" /></TableCell>
