@@ -26,6 +26,24 @@ import SettingsIcon from "@mui/icons-material/Settings";
 import { useUserSettings } from "../lib/hooks";
 import { useSnackbar } from "notistack";
 
+// Locale-safe helpers for Timesats input (Norwegian)
+const nbFormatter = new Intl.NumberFormat('nb-NO', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+function sanitizeRateInput(raw: string) {
+  let out = ""; let seenSep = false;
+  for (const ch of raw) {
+    if (ch >= '0' && ch <= '9') out += ch;
+    else if ((ch === ',' || ch === '.') && !seenSep) { out += ','; seenSep = true; }
+  }
+  return out;
+}
+function parseRate(text: string) {
+  const n = parseFloat((text || "").split(".").join(",").replace(",", "."));
+  return Number.isFinite(n) ? n : NaN;
+}
+function formatRate(n: number) {
+  try { return nbFormatter.format(n || 0); } catch { return String(n || 0); }
+}
+
 export default function SettingsDrawer() {
   const [open, setOpen] = useState(false);
   const { settings, updateSettings: updateSettingsDb, isLoading } = useUserSettings();
@@ -35,6 +53,7 @@ export default function SettingsDrawer() {
   const [paidBreak, setPaidBreak] = useState(false);
   const [taxPct, setTaxPct] = useState(35);
   const [hourlyRate, setHourlyRate] = useState(0);
+  const [hourlyRateInput, setHourlyRateInput] = useState("");
   const [sender, setSender] = useState("");
   const [recipient, setRecipient] = useState("");
   const [format, setFormat] = useState<"xlsx" | "pdf">("xlsx");
@@ -49,7 +68,9 @@ export default function SettingsDrawer() {
     if (settings) {
       setPaidBreak(settings.paid_break || false);
       setTaxPct(settings.tax_pct || 35);
-      setHourlyRate(settings.hourly_rate || 0);
+      const hr = settings.hourly_rate || 0;
+      setHourlyRate(hr);
+      setHourlyRateInput(formatRate(hr));
       setSender(settings.timesheet_sender || "");
       setRecipient(settings.timesheet_recipient || "");
       setFormat(settings.timesheet_format || "xlsx");
@@ -108,13 +129,18 @@ export default function SettingsDrawer() {
                 <AccordionDetails>
                   <Stack spacing={2}>
                     <TextField
-                      type="number"
                       label="Timesats (kr/t)"
-                      value={hourlyRate}
-                      onChange={(e) => setHourlyRate(Number(e.target.value) || 0)}
+                      value={hourlyRateInput}
+                      inputMode="decimal"
+                      onChange={(e) => {
+                        const v = sanitizeRateInput(e.target.value);
+                        setHourlyRateInput(v);
+                        const n = parseRate(v);
+                        if (!isNaN(n)) setHourlyRate(n);
+                      }}
+                      onBlur={() => setHourlyRateInput(formatRate(hourlyRate))}
                       fullWidth
                       disabled={saving}
-                      InputProps={{ inputProps: { min: 0, step: 10 } }}
                     />
                     <FormControl fullWidth disabled={saving}>
                       <InputLabel>Skatteprosent</InputLabel>

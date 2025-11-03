@@ -46,6 +46,24 @@ import CloseIcon from "@mui/icons-material/Close";
 import dayjs from "dayjs";
 import { API_BASE, createLog, deleteLog, fetchLogs, createLogsBulk, webhookTestRelay, deleteLogsMonth, deleteLogsAll, updateLog, sendTimesheet, type LogRow } from "../lib/api";
 
+// Locale-safe helpers for Timesats input (Norwegian)
+const nbFormatter = new Intl.NumberFormat('nb-NO', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+function sanitizeRateInput(raw: string) {
+  let out = ""; let seenSep = false;
+  for (const ch of raw) {
+    if (ch >= '0' && ch <= '9') out += ch;
+    else if ((ch === ',' || ch === '.') && !seenSep) { out += ','; seenSep = true; }
+  }
+  return out;
+}
+function parseRate(text: string) {
+  const n = parseFloat((text || "").split(".").join(",").replace(",", "."));
+  return Number.isFinite(n) ? n : NaN;
+}
+function formatRate(n: number) {
+  try { return nbFormatter.format(n || 0); } catch { return String(n || 0); }
+}
+
 function parseCsv(text: string) {
   const lines = text.split(/\r?\n/).filter(Boolean);
   if (lines.length === 0) return [] as any[];
@@ -445,6 +463,8 @@ export default function Home() {
 
   // Settings from database with fallbacks
   const rate = settings?.hourly_rate || 0;
+  const [rateInput, setRateInput] = useState<string>("");
+  useEffect(() => { setRateInput(formatRate(rate)); }, [rate]);
   const paidBreak = settings?.paid_break || false;
   const taxPct = settings?.tax_pct || 35;
   const monthNav = settings?.month_nav || dayjs().format("YYYYMM");
@@ -835,10 +855,16 @@ export default function Home() {
                   <Typography variant="caption" color="text.secondary">Ved betalt pause trekkes ikke pause fra timene.</Typography>
                 </Stack>
                 <TextField
-                  type="number"
                   label="Timesats (kr/t)"
-                  value={rate}
-                  onChange={(e) => updateSettings({hourly_rate: Number(e.target.value) || 0})}
+                  value={rateInput}
+                  inputMode="decimal"
+                  onChange={(e) => {
+                    const v = sanitizeRateInput(e.target.value);
+                    setRateInput(v);
+                    const n = parseRate(v);
+                    if (!isNaN(n)) updateSettings({ hourly_rate: n });
+                  }}
+                  onBlur={() => setRateInput(formatRate(rate))}
                 />
                 <Typography variant="body2">Estimert lønn (man–fre)</Typography>
                 <Stack direction="row" spacing={1} alignItems="center">
