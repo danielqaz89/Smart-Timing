@@ -1,0 +1,29 @@
+{
+  "name": "smart-timing-frontend",
+  "private": true,
+  "version": "0.1.0",
+  "scripts": {
+    "dev": "next dev -p 3000",
+    "build": "next build",
+    "start": "next start -p 3000"
+  },
+  "dependencies": {
+    "@emotion/react": "^11.11.4",
+    "@emotion/styled": "^11.11.5",
+    "@mui/icons-material": "^5.15.20",
+    "@mui/material": "^5.15.20",
+    "@tanstack/react-virtual": "^3.0.0-beta.65",
+    "dayjs": "^1.11.11",
+    "next": "14.2.5",
+    "notistack": "^3.0.2",
+    "react": "18.3.1",
+    "react-dom": "18.3.1",
+    "swr": "^2.2.5"
+  },
+  "devDependencies": {
+    "@types/node": "24.10.0",
+    "eslint": "^9.39.0",
+    "prettier": "^3.6.2",
+    "typescript": "5.9.3"
+  }
+}

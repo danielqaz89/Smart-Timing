@@ -1,0 +1,13 @@
+services:
+  - type: web
+    name: smart-stempling-backend
+    env: node
+    plan: free
+    autoDeploy: true
+    buildCommand: npm install
+    startCommand: node server.js
+    envVars:
+      - key: DATABASE_URL
+        sync: false
+      - key: FRONTEND_ORIGINS
+        value: https://smart-timing.vercel.app,http://localhost:3000
