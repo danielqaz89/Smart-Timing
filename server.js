@@ -6,6 +6,7 @@ const { Pool } = pkg;
 import ExcelJS from "exceljs";
 import PDFDocument from "pdfkit";
 import nodemailer from "nodemailer";
+import { syncToKinoaSheet, isKinoaCompany } from "./lib/googleSheets.js";
 dotenv.config();
 const app = express();
 const allowedOrigins = (process.env.FRONTEND_ORIGINS || "https://smart-timing-git-main-daniel-qazis-projects.vercel.app,http://localhost:3000,http://127.0.0.1:3000")
@@ -611,6 +612,93 @@ app.delete("/api/quick-templates/:id", async (req, res) => {
   } catch (e) {
     console.error(e);
     res.status(500).json({ error: String(e) });
+  }
+});
+
+// ===== GOOGLE SHEETS SYNC ENDPOINT =====
+// POST /api/sheets/sync - Sync logs to Google Sheets (Kinoa Tiltak AS format only)
+// Body: { month: 'YYYYMM', user_id?: 'default' }
+app.post("/api/sheets/sync", async (req, res) => {
+  try {
+    const { month, user_id = 'default' } = req.body;
+    if (!month) return res.status(400).json({ error: 'Month (YYYYMM) is required' });
+    
+    // Get user settings (contains sheet_url)
+    const settingsResult = await pool.query(
+      'SELECT * FROM user_settings WHERE user_id = $1',
+      [user_id]
+    );
+    const settings = settingsResult.rows[0];
+    
+    if (!settings?.sheet_url) {
+      return res.status(400).json({ error: 'Google Sheet URL not configured in user settings' });
+    }
+    
+    // Get active project info
+    const projectResult = await pool.query(
+      'SELECT * FROM project_info WHERE user_id = $1 AND is_active = true LIMIT 1',
+      [user_id]
+    );
+    const projectInfo = projectResult.rows[0];
+    
+    if (!projectInfo) {
+      return res.status(400).json({ error: 'No active project found' });
+    }
+    
+    // Check if this is a Kinoa company (only sync for Kinoa Tiltak AS)
+    if (!isKinoaCompany(projectInfo.bedrift)) {
+      return res.status(400).json({ 
+        error: `Google Sheets sync is only available for Kinoa Tiltak AS. Current company: ${projectInfo.bedrift}` 
+      });
+    }
+    
+    // Get logs for the specified month
+    const logsResult = await pool.query(
+      `SELECT * FROM log_row 
+       WHERE user_id = $1 
+       AND to_char(date, 'YYYYMM') = $2 
+       ORDER BY date ASC, start_time ASC`,
+      [user_id, String(month)]
+    );
+    const logs = logsResult.rows;
+    
+    if (logs.length === 0) {
+      return res.status(400).json({ error: 'No logs found for the specified month' });
+    }
+    
+    // Perform sync
+    const result = await syncToKinoaSheet(settings.sheet_url, projectInfo, logs);
+    
+    // Log sync to sync_log table
+    await pool.query(`
+      INSERT INTO sync_log (user_id, sync_type, status, row_count)
+      VALUES ($1, 'sheets_import', 'success', $2)
+    `, [user_id, result.rowsAdded]);
+    
+    res.json({
+      success: true,
+      message: `Synced ${result.rowsAdded} log entries to Google Sheets`,
+      ...result,
+    });
+    
+  } catch (e) {
+    console.error('Google Sheets sync error:', e);
+    
+    // Log error to sync_log table
+    try {
+      const user_id = req.body?.user_id || 'default';
+      await pool.query(`
+        INSERT INTO sync_log (user_id, sync_type, status, error_message)
+        VALUES ($1, 'sheets_import', 'error', $2)
+      `, [user_id, String(e)]);
+    } catch (logError) {
+      console.error('Failed to log sync error:', logError);
+    }
+    
+    res.status(500).json({ 
+      error: 'Failed to sync to Google Sheets',
+      details: String(e),
+    });
   }
 });
 
