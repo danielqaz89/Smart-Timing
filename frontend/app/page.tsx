@@ -49,6 +49,7 @@ import { exportToPDF } from "../lib/pdfExport";
 import { useThemeMode } from "../components/ThemeRegistry";
 import Brightness4Icon from "@mui/icons-material/Brightness4";
 import Brightness7Icon from "@mui/icons-material/Brightness7";
+import QuickStampFAB from "../components/QuickStampFAB";
 
 // Locale-safe helpers for Timesats input (Norwegian)
 const nbFormatter = new Intl.NumberFormat('nb-NO', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -600,6 +601,42 @@ export default function Home() {
     setQuickNotes("");
     await mutate();
     showToast("Stempling registrert");
+  }
+
+  // Quick stamp from FAB
+  async function handleQuickStampFromFAB(template: any) {
+    await createLog({
+      date: dayjs().format("YYYY-MM-DD"),
+      start: dayjs().format("HH:mm"),
+      end: dayjs().format("HH:mm"),
+      breakHours: 0,
+      activity: template.activity,
+      title: template.title || undefined,
+      project: template.project || undefined,
+      place: template.place || undefined,
+      notes: undefined,
+    });
+    await mutate();
+    showToast(`Stemplet inn: ${template.activity === 'Work' ? 'Arbeid' : 'Møte'}`);
+  }
+
+  // Stamp out from FAB
+  async function handleStampOutFromFAB() {
+    if (!activeStamp) return;
+    await updateLog(activeStamp.id, {
+      date: activeStamp.date,
+      start: activeStamp.start_time?.slice(0,5),
+      end: dayjs().format("HH:mm"),
+      breakHours: 0,
+      activity: activeStamp.activity as any,
+      title: activeStamp.title || null,
+      project: activeStamp.project || null,
+      place: activeStamp.place || null,
+      notes: activeStamp.notes || null,
+      expenseCoverage: 0,
+    });
+    await mutate();
+    showToast("Stemplet ut");
   }
 
   async function handleAddManual() {
@@ -1361,6 +1398,14 @@ export default function Home() {
 
       {/* Add bottom padding for mobile nav */}
       <Box sx={{ height: 70, display: { xs: 'block', md: 'none' } }} />
+      
+      {/* Quick Stamp FAB (Mobile Only) */}
+      <QuickStampFAB
+        templates={templates}
+        activeStamp={activeStamp}
+        onStampIn={handleQuickStampFromFAB}
+        onStampOut={handleStampOutFromFAB}
+      />
     </Container>
   );
 }
