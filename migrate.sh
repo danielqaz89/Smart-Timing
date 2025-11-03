@@ -61,6 +61,16 @@ echo -e "${BLUE}🔄 Running migration: 002_add_invoice_reminder.sql${NC}"
 $PSQL "$DATABASE_URL" -f migrations/002_add_invoice_reminder.sql
 
 if [ $? -eq 0 ]; then
+  echo -e "${GREEN}✅ Migration 002 completed${NC}"
+else
+  echo -e "${RED}❌ Migration 002 failed${NC}"
+  exit 1
+fi
+
+echo -e "${BLUE}🔄 Running migration: 003_add_theme_and_view_mode.sql${NC}"
+$PSQL "$DATABASE_URL" -f migrations/003_add_theme_and_view_mode.sql
+
+if [ $? -eq 0 ]; then
   echo -e "${GREEN}✅ Migration completed successfully!${NC}"
   echo ""
   echo -e "${BLUE}📋 Verifying tables...${NC}"

@@ -1,6 +1,7 @@
 "use client";
 import { ReactNode, useState, useEffect, createContext, useContext } from "react";
 import { CssBaseline, ThemeProvider, createTheme, PaletteMode } from "@mui/material";
+import { updateSettings, fetchSettings } from "../lib/api";
 
 const ThemeModeContext = createContext({
   mode: 'dark' as PaletteMode,
@@ -13,18 +14,28 @@ export function useThemeMode() {
 
 export default function ThemeRegistry({ children }: { children: ReactNode }) {
   const [mode, setMode] = useState<PaletteMode>('dark');
+  const [loaded, setLoaded] = useState(false);
 
+  // Load theme from database on mount
   useEffect(() => {
-    const saved = localStorage.getItem('theme-mode') as PaletteMode;
-    if (saved) setMode(saved);
+    fetchSettings('default').then(settings => {
+      if (settings?.theme_mode) {
+        setMode(settings.theme_mode as PaletteMode);
+      }
+      setLoaded(true);
+    }).catch(() => setLoaded(true));
   }, []);
 
-  const toggleMode = () => {
-    setMode((prev) => {
-      const newMode = prev === 'dark' ? 'light' : 'dark';
-      localStorage.setItem('theme-mode', newMode);
-      return newMode;
-    });
+  const toggleMode = async () => {
+    const newMode = mode === 'dark' ? 'light' : 'dark';
+    setMode(newMode);
+    
+    // Save to database
+    try {
+      await updateSettings({ theme_mode: newMode }, 'default');
+    } catch (e) {
+      console.error('Failed to save theme mode:', e);
+    }
   };
 
   const theme = createTheme({

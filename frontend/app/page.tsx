@@ -467,7 +467,24 @@ export default function Home() {
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [bulkMode, setBulkMode] = useState(false);
-  const [viewMode, setViewMode] = useState<'month' | 'week'>('month');
+  const [viewMode, setViewMode] = useState<'month' | 'week'>(settings?.view_mode || 'month');
+  
+  // Sync view mode from settings
+  useEffect(() => {
+    if (settings?.view_mode) {
+      setViewMode(settings.view_mode as 'month' | 'week');
+    }
+  }, [settings?.view_mode]);
+  
+  // Update view mode in database
+  const updateViewMode = async (mode: 'month' | 'week') => {
+    setViewMode(mode);
+    try {
+      await updateSettings({ view_mode: mode });
+    } catch (e) {
+      console.error('Failed to save view mode:', e);
+    }
+  };
 
   // Detect active stamp (today's entry with same start/end time)
   const activeStamp = useMemo(() => {
@@ -1035,14 +1052,14 @@ export default function Home() {
                   <Chip 
                     label="Uke"
                     size="small" 
-                    onClick={() => setViewMode('week')}
+                    onClick={() => updateViewMode('week')}
                     color={viewMode === 'week' ? "primary" : "default"}
                     variant={viewMode === 'week' ? "filled" : "outlined"}
                   />
                   <Chip 
                     label="Måned"
                     size="small" 
-                    onClick={() => setViewMode('month')}
+                    onClick={() => updateViewMode('month')}
                     color={viewMode === 'month' ? "primary" : "default"}
                     variant={viewMode === 'month' ? "filled" : "outlined"}
                   />
@@ -1051,7 +1068,7 @@ export default function Home() {
                     label="Denne måneden" 
                     size="small" 
                     onClick={() => {
-                      setViewMode('month');
+                      updateViewMode('month');
                       updateSettings({month_nav: dayjs().format("YYYYMM")});
                     }}
                     color={monthNav === dayjs().format("YYYYMM") ? "primary" : "default"}
@@ -1060,7 +1077,7 @@ export default function Home() {
                     label="Forrige måned" 
                     size="small" 
                     onClick={() => {
-                      setViewMode('month');
+                      updateViewMode('month');
                       updateSettings({month_nav: dayjs().subtract(1, "month").format("YYYYMM")});
                     }}
                     color={monthNav === dayjs().subtract(1, "month").format("YYYYMM") ? "primary" : "default"}
@@ -1069,7 +1086,7 @@ export default function Home() {
                     label="Dette året" 
                     size="small" 
                     onClick={() => {
-                      setViewMode('month');
+                      updateViewMode('month');
                       updateSettings({month_nav: dayjs().startOf("year").format("YYYYMM")});
                     }}
                   />

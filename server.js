@@ -86,6 +86,8 @@ async function initTables(){
       sheet_url TEXT,
       month_nav TEXT,
       invoice_reminder_active BOOLEAN DEFAULT false,
+      theme_mode TEXT DEFAULT 'dark' CHECK (theme_mode IN ('light', 'dark')),
+      view_mode TEXT DEFAULT 'month' CHECK (view_mode IN ('week', 'month')),
       created_at TIMESTAMP DEFAULT NOW(),
       updated_at TIMESTAMP DEFAULT NOW()
     );
@@ -127,6 +129,8 @@ async function initTables(){
     ALTER TABLE log_row ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT NOW();
     ALTER TABLE log_row ADD COLUMN IF NOT EXISTS expense_coverage NUMERIC(10,2) DEFAULT 0;
     ALTER TABLE user_settings ADD COLUMN IF NOT EXISTS invoice_reminder_active BOOLEAN DEFAULT false;
+    ALTER TABLE user_settings ADD COLUMN IF NOT EXISTS theme_mode TEXT DEFAULT 'dark';
+    ALTER TABLE user_settings ADD COLUMN IF NOT EXISTS view_mode TEXT DEFAULT 'month';
   `);
   
   // Create indexes (after columns exist)
@@ -405,6 +409,8 @@ app.get("/api/settings", async (req, res) => {
         sheet_url: null,
         month_nav: null,
         invoice_reminder_active: false,
+        theme_mode: 'dark',
+        view_mode: 'month',
       });
     }
     res.json(result.rows[0]);
@@ -422,7 +428,7 @@ app.post("/api/settings", async (req, res) => {
       paid_break, tax_pct, hourly_rate,
       timesheet_sender, timesheet_recipient, timesheet_format,
       smtp_app_password, webhook_active, webhook_url, sheet_url, month_nav,
-      invoice_reminder_active
+      invoice_reminder_active, theme_mode, view_mode
     } = req.body;
     
     const result = await pool.query(`
@@ -430,8 +436,8 @@ app.post("/api/settings", async (req, res) => {
         user_id, paid_break, tax_pct, hourly_rate,
         timesheet_sender, timesheet_recipient, timesheet_format,
         smtp_app_password, webhook_active, webhook_url, sheet_url, month_nav, 
-        invoice_reminder_active, updated_at
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, NOW())
+        invoice_reminder_active, theme_mode, view_mode, updated_at
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, NOW())
       ON CONFLICT (user_id) DO UPDATE SET
         paid_break = COALESCE($2, user_settings.paid_break),
         tax_pct = COALESCE($3, user_settings.tax_pct),
@@ -445,11 +451,13 @@ app.post("/api/settings", async (req, res) => {
         sheet_url = COALESCE($11, user_settings.sheet_url),
         month_nav = COALESCE($12, user_settings.month_nav),
         invoice_reminder_active = COALESCE($13, user_settings.invoice_reminder_active),
+        theme_mode = COALESCE($14, user_settings.theme_mode),
+        view_mode = COALESCE($15, user_settings.view_mode),
         updated_at = NOW()
       RETURNING *
     `, [userId, paid_break, tax_pct, hourly_rate, timesheet_sender, timesheet_recipient,
         timesheet_format, smtp_app_password, webhook_active, webhook_url, sheet_url, month_nav,
-        invoice_reminder_active]);
+        invoice_reminder_active, theme_mode, view_mode]);
     
     res.json(result.rows[0]);
   } catch (e) {

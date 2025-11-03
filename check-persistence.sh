@@ -77,6 +77,8 @@ EXPECTED_COLUMNS=(
   "sheet_url:text"
   "month_nav:text"
   "invoice_reminder_active:boolean"
+  "theme_mode:text"
+  "view_mode:text"
 )
 
 for col_def in "${EXPECTED_COLUMNS[@]}"; do
