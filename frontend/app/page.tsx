@@ -751,6 +751,16 @@ export default function Home() {
       <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mb: 2 }}>
         <Typography variant="h4">Smart Stempling</Typography>
         <Stack direction="row" spacing={1}>
+          <Link href="/reports" passHref legacyBehavior>
+            <Button 
+              variant="outlined" 
+              size="small"
+              aria-label="Se rapporter"
+              title="Se rapporter"
+            >
+              Rapporter
+            </Button>
+          </Link>
           <Link href="/setup" passHref legacyBehavior>
             <Button 
               variant="outlined" 
