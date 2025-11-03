@@ -452,7 +452,7 @@ export default function Home() {
 
   const [date, setDate] = useState(dayjs().format("YYYY-MM-DD"));
   const [start, setStart] = useState(dayjs().format("HH:mm"));
-  const [end, setEnd] = useState(dayjs().add(1, "hour").format("HH:mm"));
+  const [end, setEnd] = useState(dayjs().format("HH:mm")); // Auto-fill same as start
   const [breakHours, setBreakHours] = useState(0);
   const [expenseCoverage, setExpenseCoverage] = useState(0);
   const [manualActivity, setManualActivity] = useState<"Work" | "Meeting">("Work");
@@ -460,6 +460,32 @@ export default function Home() {
   const [manualProject, setManualProject] = useState("");
   const [manualPlace, setManualPlace] = useState("");
   const [manualNotes, setManualNotes] = useState("");
+  const [searchQuery, setSearchQuery] = useState("");
+
+  // Detect active stamp (today's entry with same start/end time)
+  const activeStamp = useMemo(() => {
+    const today = dayjs().format("YYYY-MM-DD");
+    return logs.find(l => l.date === today && l.start_time === l.end_time);
+  }, [logs]);
+
+  // Timer for active stamp
+  const [elapsedTime, setElapsedTime] = useState("00:00:00");
+  useEffect(() => {
+    if (!activeStamp) {
+      setElapsedTime("00:00:00");
+      return;
+    }
+    const interval = setInterval(() => {
+      const start = dayjs(`${activeStamp.date} ${activeStamp.start_time}`);
+      const now = dayjs();
+      const diff = now.diff(start, 'second');
+      const hours = Math.floor(diff / 3600);
+      const minutes = Math.floor((diff % 3600) / 60);
+      const seconds = diff % 60;
+      setElapsedTime(`${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`);
+    }, 1000);
+    return () => clearInterval(interval);
+  }, [activeStamp]);
 
   // Settings from database with fallbacks
   const rate = settings?.hourly_rate || 0;
@@ -478,7 +504,20 @@ export default function Home() {
     ([, m]) => fetchLogs(m),
     { revalidateOnFocus: false }
   );
-  const logs: LogRow[] = (data || []).flat();
+  const allLogs: LogRow[] = (data || []).flat();
+  
+  // Filter logs based on search query
+  const logs = useMemo(() => {
+    if (!searchQuery.trim()) return allLogs;
+    const q = searchQuery.toLowerCase();
+    return allLogs.filter(l => 
+      l.title?.toLowerCase().includes(q) ||
+      l.project?.toLowerCase().includes(q) ||
+      l.place?.toLowerCase().includes(q) ||
+      l.notes?.toLowerCase().includes(q) ||
+      l.activity?.toLowerCase().includes(q)
+    );
+  }, [allLogs, searchQuery]);
   const totalHours = useMemo(() => {
     return logs.reduce((sum, r) => {
       const d = dayjs(r.date);
@@ -536,6 +575,16 @@ export default function Home() {
       place: manualPlace || undefined,
       notes: manualNotes || undefined,
     });
+    // Clear form after submit
+    setDate(dayjs().format("YYYY-MM-DD"));
+    setStart(dayjs().format("HH:mm"));
+    setEnd(dayjs().format("HH:mm"));
+    setBreakHours(0);
+    setExpenseCoverage(0);
+    setManualTitle("");
+    setManualProject("");
+    setManualPlace("");
+    setManualNotes("");
     await mutate();
     showToast("Rad lagt til");
   }
@@ -579,6 +628,18 @@ export default function Home() {
     });
   }
   function cancelEdit() { setEditingId(null); setEditForm({}); }
+
+  // Keyboard shortcuts
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // Escape to cancel edit
+      if (e.key === 'Escape' && editingId) {
+        cancelEdit();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [editingId]);
   async function saveEdit(id: string, prevRow?: LogRow) {
     if (prevRow) {
       setUndo({ type: "update", id, prev: prevRow as any });
@@ -747,6 +808,18 @@ export default function Home() {
             <CardHeader title="Stempling" />
             <CardContent>
               <Stack spacing={2}>
+                {activeStamp && (
+                  <Box sx={{ p: 2, bgcolor: 'success.light', borderRadius: 1 }}>
+                    <Stack spacing={1}>
+                      <Typography variant="caption" color="success.dark" fontWeight="bold">
+                        Stemplet inn: {activeStamp.start_time?.slice(0,5)} - {activeStamp.activity === 'Work' ? 'Arbeid' : 'Møte'}
+                      </Typography>
+                      <Typography variant="h4" color="success.dark" fontWeight="bold">
+                        {elapsedTime}
+                      </Typography>
+                    </Stack>
+                  </Box>
+                )}
                 <FormControl fullWidth>
                   <InputLabel>Aktivitet</InputLabel>
                   <Select
@@ -790,7 +863,32 @@ export default function Home() {
             <CardHeader title="Legg til manuelt" />
             <CardContent>
               <Stack spacing={2}>
-                <TextField type="date" label="Dato" InputLabelProps={{ shrink: true }} value={date} onChange={(e) => setDate(e.target.value)} />
+                <Stack direction="row" spacing={1} alignItems="center">
+                  <TextField type="date" label="Dato" InputLabelProps={{ shrink: true }} value={date} onChange={(e) => setDate(e.target.value)} sx={{ flex: 1 }} />
+                  <Chip label="I dag" size="small" onClick={() => setDate(dayjs().format("YYYY-MM-DD"))} />
+                  <Chip label="I går" size="small" onClick={() => setDate(dayjs().subtract(1, 'day').format("YYYY-MM-DD"))} />
+                </Stack>
+                <Button 
+                  variant="outlined" 
+                  size="small" 
+                  onClick={() => {
+                    const lastEntry = logs.find(l => dayjs(l.date).isBefore(dayjs()));
+                    if (lastEntry) {
+                      setManualActivity(lastEntry.activity as any);
+                      setStart(lastEntry.start_time?.slice(0,5) || "");
+                      setEnd(lastEntry.end_time?.slice(0,5) || "");
+                      setBreakHours(Number(lastEntry.break_hours || 0));
+                      setManualTitle(lastEntry.title || "");
+                      setManualProject(lastEntry.project || "");
+                      setManualPlace(lastEntry.place || "");
+                      showToast("Forrige rad kopiert");
+                    } else {
+                      showToast("Ingen tidligere rader funnet", "warning");
+                    }
+                  }}
+                >
+                  Kopier forrige rad
+                </Button>
                 <FormControl fullWidth>
                   <InputLabel>Aktivitet</InputLabel>
                   <Select
@@ -804,7 +902,16 @@ export default function Home() {
                 </FormControl>
                 <Stack direction="row" spacing={2}>
                   <TextField type="time" label="Inn" InputLabelProps={{ shrink: true }} value={start} onChange={(e) => setStart(e.target.value)} fullWidth />
-                  <TextField type="time" label="Ut" InputLabelProps={{ shrink: true }} value={end} onChange={(e) => setEnd(e.target.value)} fullWidth />
+                  <TextField 
+                    type="time" 
+                    label="Ut" 
+                    InputLabelProps={{ shrink: true }} 
+                    value={end} 
+                    onChange={(e) => setEnd(e.target.value)} 
+                    fullWidth 
+                    error={end < start && end !== "" && start !== ""}
+                    helperText={end < start && end !== "" && start !== "" ? "Ut må være etter Inn" : ""}
+                  />
                 </Stack>
                 <TextField type="number" label="Pause (timer)" value={breakHours} onChange={(e) => setBreakHours(Number(e.target.value))} fullWidth />
                 <TextField 
@@ -835,6 +942,25 @@ export default function Home() {
                   <Button size="small" onClick={() => updateSettings({month_nav: dayjs(monthNav+"01").subtract(1, "month").format("YYYYMM")})}>{"<"}</Button>
                   <TextField label="Måned" value={monthNav} onChange={(e) => updateSettings({month_nav: e.target.value.replace(/[^0-9]/g, '').slice(0,6)})} />
                   <Button size="small" onClick={() => updateSettings({month_nav: dayjs(monthNav+"01").add(1, "month").format("YYYYMM")})}>{">"}</Button>
+                </Stack>
+                <Stack direction="row" spacing={1} flexWrap="wrap">
+                  <Chip 
+                    label="Denne måneden" 
+                    size="small" 
+                    onClick={() => updateSettings({month_nav: dayjs().format("YYYYMM")})}
+                    color={monthNav === dayjs().format("YYYYMM") ? "primary" : "default"}
+                  />
+                  <Chip 
+                    label="Forrige måned" 
+                    size="small" 
+                    onClick={() => updateSettings({month_nav: dayjs().subtract(1, "month").format("YYYYMM")})}
+                    color={monthNav === dayjs().subtract(1, "month").format("YYYYMM") ? "primary" : "default"}
+                  />
+                  <Chip 
+                    label="Dette året" 
+                    size="small" 
+                    onClick={() => updateSettings({month_nav: dayjs().startOf("year").format("YYYYMM")})}
+                  />
                 </Stack>
                 <Divider />
                 <Typography variant="body2">Totale timer (man–fre)</Typography>
@@ -949,6 +1075,14 @@ export default function Home() {
         <Card>
           <CardHeader title={`Logg for ${monthNav}`} />
           <CardContent>
+            <TextField 
+              placeholder="Søk i logger (tittel, prosjekt, sted, notater, aktivitet)..."
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              fullWidth
+              size="small"
+              sx={{ mb: 2 }}
+            />
             <div style={{ height: 360, overflow: 'auto' }} ref={parentRef}>
               <Table size="small" sx={{ minWidth: 900 }}>
                 <TableHead>
