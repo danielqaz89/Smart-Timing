@@ -402,6 +402,7 @@ app.get("/api/settings", async (req, res) => {
         webhook_url: null,
         sheet_url: null,
         month_nav: null,
+        invoice_reminder_active: false,
       });
     }
     res.json(result.rows[0]);
@@ -418,15 +419,17 @@ app.post("/api/settings", async (req, res) => {
     const {
       paid_break, tax_pct, hourly_rate,
       timesheet_sender, timesheet_recipient, timesheet_format,
-      smtp_app_password, webhook_active, webhook_url, sheet_url, month_nav
+      smtp_app_password, webhook_active, webhook_url, sheet_url, month_nav,
+      invoice_reminder_active
     } = req.body;
     
     const result = await pool.query(`
       INSERT INTO user_settings (
         user_id, paid_break, tax_pct, hourly_rate,
         timesheet_sender, timesheet_recipient, timesheet_format,
-        smtp_app_password, webhook_active, webhook_url, sheet_url, month_nav, updated_at
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, NOW())
+        smtp_app_password, webhook_active, webhook_url, sheet_url, month_nav, 
+        invoice_reminder_active, updated_at
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, NOW())
       ON CONFLICT (user_id) DO UPDATE SET
         paid_break = COALESCE($2, user_settings.paid_break),
         tax_pct = COALESCE($3, user_settings.tax_pct),
@@ -439,10 +442,12 @@ app.post("/api/settings", async (req, res) => {
         webhook_url = COALESCE($10, user_settings.webhook_url),
         sheet_url = COALESCE($11, user_settings.sheet_url),
         month_nav = COALESCE($12, user_settings.month_nav),
+        invoice_reminder_active = COALESCE($13, user_settings.invoice_reminder_active),
         updated_at = NOW()
       RETURNING *
     `, [userId, paid_break, tax_pct, hourly_rate, timesheet_sender, timesheet_recipient,
-        timesheet_format, smtp_app_password, webhook_active, webhook_url, sheet_url, month_nav]);
+        timesheet_format, smtp_app_password, webhook_active, webhook_url, sheet_url, month_nav,
+        invoice_reminder_active]);
     
     res.json(result.rows[0]);
   } catch (e) {

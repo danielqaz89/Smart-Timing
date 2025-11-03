@@ -61,6 +61,7 @@ export default function SettingsDrawer() {
   const [webhookActive, setWebhookActive] = useState(false);
   const [webhookUrl, setWebhookUrl] = useState("");
   const [sheetUrl, setSheetUrl] = useState("");
+  const [invoiceReminderActive, setInvoiceReminderActive] = useState(false);
   const [saving, setSaving] = useState(false);
 
   // Load from database when drawer opens or settings change
@@ -78,6 +79,7 @@ export default function SettingsDrawer() {
       setWebhookActive(settings.webhook_active || false);
       setWebhookUrl(settings.webhook_url || "");
       setSheetUrl(settings.sheet_url || "");
+      setInvoiceReminderActive(settings.invoice_reminder_active || false);
     }
   }, [settings, open]);
 
@@ -95,6 +97,7 @@ export default function SettingsDrawer() {
         webhook_active: webhookActive,
         webhook_url: webhookUrl,
         sheet_url: sheetUrl,
+        invoice_reminder_active: invoiceReminderActive,
       });
       enqueueSnackbar("Alle innstillinger lagret", { variant: "success" });
       setOpen(false);
@@ -220,6 +223,20 @@ export default function SettingsDrawer() {
                     />
                     <Typography variant="caption" color="text.secondary">
                       For Gmail/Outlook: Bruk app-spesifikt passord. Vi gjetter SMTP-server fra e-post.
+                    </Typography>
+                    <Divider sx={{ my: 2 }} />
+                    <FormControlLabel
+                      control={
+                        <Switch
+                          checked={invoiceReminderActive}
+                          onChange={(e) => setInvoiceReminderActive(e.target.checked)}
+                          disabled={saving}
+                        />
+                      }
+                      label="Aktiver påminnelse om fakturering"
+                    />
+                    <Typography variant="caption" color="text.secondary">
+                      Motta automatisk påminnelse om å sende faktura ved månedsslutt.
                     </Typography>
                   </Stack>
                 </AccordionDetails>
