@@ -45,6 +45,7 @@ import SaveIcon from "@mui/icons-material/Save";
 import CloseIcon from "@mui/icons-material/Close";
 import dayjs from "dayjs";
 import { API_BASE, createLog, deleteLog, fetchLogs, createLogsBulk, webhookTestRelay, deleteLogsMonth, deleteLogsAll, updateLog, sendTimesheet, type LogRow } from "../lib/api";
+import { exportToPDF } from "../lib/pdfExport";
 
 // Locale-safe helpers for Timesats input (Norwegian)
 const nbFormatter = new Intl.NumberFormat('nb-NO', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -1073,7 +1074,19 @@ export default function Home() {
 
       <Box mt={3} ref={logsRef}>
         <Card>
-          <CardHeader title={`Logg for ${monthNav}`} />
+          <CardHeader 
+            title={`Logg for ${monthNav}`}
+            action={
+              <Button 
+                variant="outlined" 
+                size="small" 
+                onClick={() => exportToPDF(allLogs, monthNav, projectInfo, settings)}
+                disabled={allLogs.length === 0}
+              >
+                Eksporter PDF
+              </Button>
+            }
+          />
           <CardContent>
             <TextField 
               placeholder="Søk i logger (tittel, prosjekt, sted, notater, aktivitet)..."
