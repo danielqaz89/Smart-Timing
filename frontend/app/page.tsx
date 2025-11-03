@@ -50,6 +50,7 @@ import { useThemeMode } from "../components/ThemeRegistry";
 import Brightness4Icon from "@mui/icons-material/Brightness4";
 import Brightness7Icon from "@mui/icons-material/Brightness7";
 import QuickStampFAB from "../components/QuickStampFAB";
+import TemplateManager from "../components/TemplateManager";
 
 // Locale-safe helpers for Timesats input (Norwegian)
 const nbFormatter = new Intl.NumberFormat('nb-NO', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -1203,6 +1204,14 @@ export default function Home() {
       </Grid>
 
       <Grid container spacing={2} sx={{ mt: 1 }}>
+        <Grid item xs={12}>
+          <TemplateManager
+            templates={templates}
+            onCreate={createTemplate}
+            onDelete={deleteTemplate}
+            onToast={showToast}
+          />
+        </Grid>
         <Grid item xs={12} ref={importRef}>
           <Card>
             <CardHeader title="Importer timeplan (CSV)" />
