@@ -4,12 +4,15 @@ import type { ReactNode } from "react";
 
 export const metadata = {
   title: "Smart Stempling",
-  themeColor: "#0b1220",
   manifest: "/manifest.webmanifest",
   icons: {
     icon: "/icons/icon.svg",
     apple: "/icons/icon.svg",
   },
+};
+
+export const viewport = {
+  themeColor: "#0b1220",
 };
 
 export default function RootLayout({ children }: { children: ReactNode }) {

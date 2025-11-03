@@ -531,6 +531,43 @@ app.put("/api/project-info/:id", async (req, res) => {
   }
 });
 
+// ===== COMPANIES ENDPOINTS =====
+// GET /api/companies - Fetch all companies with logos
+app.get("/api/companies", async (req, res) => {
+  try {
+    const result = await pool.query(
+      'SELECT id, name, logo_base64, display_order FROM companies ORDER BY display_order ASC, name ASC'
+    );
+    res.json(result.rows);
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: String(e) });
+  }
+});
+
+// POST /api/companies - Create or update company with logo
+app.post("/api/companies", async (req, res) => {
+  try {
+    const { name, logo_base64, display_order } = req.body;
+    if (!name) return res.status(400).json({ error: "Company name is required" });
+    
+    const result = await pool.query(`
+      INSERT INTO companies (name, logo_base64, display_order, updated_at)
+      VALUES ($1, $2, $3, NOW())
+      ON CONFLICT (name) DO UPDATE SET
+        logo_base64 = COALESCE($2, companies.logo_base64),
+        display_order = COALESCE($3, companies.display_order),
+        updated_at = NOW()
+      RETURNING *
+    `, [name, logo_base64, display_order || 0]);
+    
+    res.json(result.rows[0]);
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: String(e) });
+  }
+});
+
 // ===== QUICK TEMPLATES ENDPOINTS =====
 // GET /api/quick-templates?user_id=default
 app.get("/api/quick-templates", async (req, res) => {

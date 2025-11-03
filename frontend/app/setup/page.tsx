@@ -6,6 +6,13 @@ import Image from "next/image";
 import { useProjectInfo } from "../../lib/hooks";
 import { searchBrregCompany, KINOA_TILTAK_AS, type BrregCompany } from "../../lib/brreg";
 
+interface Company {
+  id: number;
+  name: string;
+  logo_base64: string | null;
+  display_order: number;
+}
+
 export default function Setup() {
   const router = useRouter();
   const { projectInfo, createProjectInfo, updateProjectInfo, isLoading } = useProjectInfo();
@@ -21,6 +28,25 @@ export default function Setup() {
   const [saving, setSaving] = useState(false);
   const [brregOptions, setBrregOptions] = useState<BrregCompany[]>([]);
   const [brregLoading, setBrregLoading] = useState(false);
+  const [companies, setCompanies] = useState<Company[]>([]);
+  const [companyLogo, setCompanyLogo] = useState<string | null>(null);
+
+  // Fetch companies from API
+  useEffect(() => {
+    async function fetchCompanies() {
+      try {
+        const apiBase = process.env.NEXT_PUBLIC_API_BASE || 'http://localhost:4000';
+        const res = await fetch(`${apiBase}/api/companies`);
+        if (res.ok) {
+          const data = await res.json();
+          setCompanies(data);
+        }
+      } catch (e) {
+        console.error('Failed to fetch companies:', e);
+      }
+    }
+    fetchCompanies();
+  }, []);
 
   // Load existing project info from database
   useEffect(() => {
@@ -36,6 +62,14 @@ export default function Setup() {
       });
     }
   }, [projectInfo]);
+
+  // Update logo when company changes
+  useEffect(() => {
+    const matchedCompany = companies.find(
+      c => form.bedrift.toLowerCase().includes(c.name.toLowerCase())
+    );
+    setCompanyLogo(matchedCompany?.logo_base64 || null);
+  }, [form.bedrift, companies]);
 
   // BRREG search with debounce
   useEffect(() => {
@@ -94,8 +128,6 @@ export default function Setup() {
     );
   }
 
-  const isKinoa = form.bedrift.toLowerCase().includes('kinoa');
-
   return (
     <Container maxWidth="sm" sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: '100vh' }}>
       <Card sx={{ width: '100%', bgcolor: 'rgba(13,17,23,0.7)', backdropFilter: 'blur(8px)', borderRadius: 3 }}>
@@ -108,16 +140,13 @@ export default function Setup() {
         />
         <CardContent>
           <Stack spacing={2}>
-            {isKinoa && (
-              <Fade in={isKinoa}>
+            {companyLogo && (
+              <Fade in={Boolean(companyLogo)}>
                 <Box sx={{ display: 'flex', justifyContent: 'center', py: 2 }}>
-                  <Image 
-                    src="/kinoa-logo.png" 
-                    alt="Kinoa Logo" 
-                    width={300} 
-                    height={150}
-                    style={{ objectFit: 'contain' }}
-                    priority
+                  <img 
+                    src={companyLogo} 
+                    alt="Company Logo" 
+                    style={{ maxWidth: '300px', maxHeight: '150px', objectFit: 'contain' }}
                   />
                 </Box>
               </Fade>

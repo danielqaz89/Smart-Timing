@@ -1,0 +1,12 @@
+To add the Kinoa logo:
+
+1. Save the Kinoa logo image (the one with "Kinoa" text and "Bolig • Familietiltak • Miljøarbeider • Tur/Avlastning")
+2. Name it: kinoa-logo.png
+3. Place it in: /Users/usmanqazi/Smart-Timing/frontend/public/kinoa-logo.png
+4. Recommended size: 600x300px (or similar 2:1 ratio)
+
+The logo will automatically display in the setup page when:
+- User types "Kinoa" in the company search field
+- User selects "KINOA TILTAK AS" from the dropdown
+
+Current integration status: ✅ Code ready, just needs the actual image file!
