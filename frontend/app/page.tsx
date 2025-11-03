@@ -740,11 +740,17 @@ export default function Home() {
 
   // Setup gate: redirect to /setup if no project info in database
   const router = useRouter();
+  const [hasCheckedSetup, setHasCheckedSetup] = useState(false);
+  
   useEffect(() => {
-    if (!projectLoading && !projectInfo) {
-      router.replace('/setup');
+    // Only check once when loading is complete
+    if (!projectLoading && !hasCheckedSetup) {
+      setHasCheckedSetup(true);
+      if (!projectInfo) {
+        router.replace('/setup');
+      }
     }
-  }, [projectInfo, projectLoading, router]);
+  }, [projectInfo, projectLoading, router, hasCheckedSetup]);
 
   // Mobile navigation handlers
   const handleMobileNavigate = (section: "home" | "logs" | "stats" | "settings") => {

@@ -8,7 +8,12 @@ export function useUserSettings() {
   const { data, error, mutate, isLoading } = useSWR<UserSettings>(
     ['settings', USER_ID],
     () => fetchSettings(USER_ID),
-    { revalidateOnFocus: false }
+    { 
+      revalidateOnFocus: false,
+      revalidateOnReconnect: false,
+      dedupingInterval: 60000,
+      errorRetryCount: 2,
+    }
   );
 
   const update = async (partial: Partial<UserSettings>) => {
@@ -35,7 +40,12 @@ export function useProjectInfo() {
   const { data, error, mutate, isLoading } = useSWR<ProjectInfo | null>(
     ['project-info', USER_ID],
     () => fetchProjectInfo(USER_ID),
-    { revalidateOnFocus: false }
+    { 
+      revalidateOnFocus: false,
+      revalidateOnReconnect: false,
+      dedupingInterval: 60000, // Dedupe requests within 60 seconds
+      errorRetryCount: 2,
+    }
   );
 
   const create = async (projectData: Omit<ProjectInfo, 'id' | 'is_active' | 'created_at' | 'updated_at'>) => {
