@@ -6,7 +6,7 @@ const { Pool } = pkg;
 import ExcelJS from "exceljs";
 import PDFDocument from "pdfkit";
 import nodemailer from "nodemailer";
-import { syncToKinoaSheet, isKinoaCompany } from "./lib/googleSheets.js";
+import { syncToKinoaSheet, isKinoaCompany, getOAuth2Client } from "./lib/googleSheets.js";
 dotenv.config();
 const app = express();
 const allowedOrigins = (process.env.FRONTEND_ORIGINS || "https://smart-timing-git-main-daniel-qazis-projects.vercel.app,http://localhost:3000,http://127.0.0.1:3000")
@@ -132,6 +132,9 @@ async function initTables(){
     ALTER TABLE user_settings ADD COLUMN IF NOT EXISTS invoice_reminder_active BOOLEAN DEFAULT false;
     ALTER TABLE user_settings ADD COLUMN IF NOT EXISTS theme_mode TEXT DEFAULT 'dark';
     ALTER TABLE user_settings ADD COLUMN IF NOT EXISTS view_mode TEXT DEFAULT 'month';
+    ALTER TABLE user_settings ADD COLUMN IF NOT EXISTS google_access_token TEXT;
+    ALTER TABLE user_settings ADD COLUMN IF NOT EXISTS google_refresh_token TEXT;
+    ALTER TABLE user_settings ADD COLUMN IF NOT EXISTS google_token_expiry TIMESTAMP;
   `);
   
   // Create indexes (after columns exist)
@@ -143,6 +146,7 @@ async function initTables(){
     CREATE INDEX IF NOT EXISTS idx_project_info_user_active ON project_info(user_id, is_active);
     CREATE INDEX IF NOT EXISTS idx_quick_templates_user ON quick_templates(user_id, display_order);
     CREATE INDEX IF NOT EXISTS idx_sync_log_user_time ON sync_log(user_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_user_settings_google_auth ON user_settings(user_id, google_token_expiry);
   `);
   console.log("✅ Tables initialized with persistence schema");
 }
@@ -615,6 +619,124 @@ app.delete("/api/quick-templates/:id", async (req, res) => {
   }
 });
 
+// ===== GOOGLE OAUTH2 ENDPOINTS =====
+// GET /api/auth/google - Initiate Google OAuth2 flow
+// Query: { user_id?: 'default' }
+app.get("/api/auth/google", async (req, res) => {
+  try {
+    const user_id = req.query.user_id || 'default';
+    const oauth2Client = getOAuth2Client();
+    
+    // Generate auth URL with necessary scopes
+    const authUrl = oauth2Client.generateAuthUrl({
+      access_type: 'offline', // Get refresh token
+      scope: [
+        'https://www.googleapis.com/auth/spreadsheets',
+        'https://www.googleapis.com/auth/userinfo.email',
+      ],
+      state: user_id, // Pass user_id through state parameter
+      prompt: 'consent', // Force consent screen to get refresh token
+    });
+    
+    res.json({ authUrl });
+  } catch (e) {
+    console.error('OAuth initiation error:', e);
+    res.status(500).json({ error: String(e) });
+  }
+});
+
+// GET /api/auth/google/callback - Handle OAuth2 callback from Google
+// Query: { code: '...', state: 'user_id' }
+app.get("/api/auth/google/callback", async (req, res) => {
+  try {
+    const { code, state } = req.query;
+    const user_id = state || 'default';
+    
+    if (!code) {
+      return res.status(400).send('Authorization code missing');
+    }
+    
+    const oauth2Client = getOAuth2Client();
+    
+    // Exchange authorization code for tokens
+    const { tokens } = await oauth2Client.getToken(code);
+    
+    // Store tokens in database
+    await pool.query(`
+      INSERT INTO user_settings (user_id, google_access_token, google_refresh_token, google_token_expiry, updated_at)
+      VALUES ($1, $2, $3, $4, NOW())
+      ON CONFLICT (user_id) DO UPDATE SET
+        google_access_token = $2,
+        google_refresh_token = COALESCE($3, user_settings.google_refresh_token),
+        google_token_expiry = $4,
+        updated_at = NOW()
+    `, [
+      user_id,
+      tokens.access_token,
+      tokens.refresh_token || null,
+      tokens.expiry_date ? new Date(tokens.expiry_date) : null,
+    ]);
+    
+    // Redirect back to frontend with success message
+    const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
+    res.redirect(`${frontendUrl}/?google_auth=success`);
+    
+  } catch (e) {
+    console.error('OAuth callback error:', e);
+    const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
+    res.redirect(`${frontendUrl}/?google_auth=error&message=${encodeURIComponent(String(e))}`);
+  }
+});
+
+// DELETE /api/auth/google/disconnect - Revoke Google OAuth access
+// Body: { user_id?: 'default' }
+app.delete("/api/auth/google/disconnect", async (req, res) => {
+  try {
+    const { user_id = 'default' } = req.body;
+    
+    // Clear tokens from database
+    await pool.query(`
+      UPDATE user_settings
+      SET google_access_token = NULL,
+          google_refresh_token = NULL,
+          google_token_expiry = NULL,
+          updated_at = NOW()
+      WHERE user_id = $1
+    `, [user_id]);
+    
+    res.json({ success: true, message: 'Google account disconnected' });
+  } catch (e) {
+    console.error('Disconnect error:', e);
+    res.status(500).json({ error: String(e) });
+  }
+});
+
+// GET /api/auth/google/status - Check if user has connected Google account
+// Query: { user_id?: 'default' }
+app.get("/api/auth/google/status", async (req, res) => {
+  try {
+    const user_id = req.query.user_id || 'default';
+    
+    const result = await pool.query(
+      'SELECT google_access_token, google_token_expiry FROM user_settings WHERE user_id = $1',
+      [user_id]
+    );
+    
+    const settings = result.rows[0];
+    const isConnected = !!settings?.google_access_token;
+    const isExpired = settings?.google_token_expiry ? new Date(settings.google_token_expiry) < new Date() : false;
+    
+    res.json({
+      isConnected,
+      isExpired,
+      needsReauth: isConnected && isExpired,
+    });
+  } catch (e) {
+    console.error('Status check error:', e);
+    res.status(500).json({ error: String(e) });
+  }
+});
+
 // ===== GOOGLE SHEETS SYNC ENDPOINT =====
 // POST /api/sheets/sync - Sync logs to Google Sheets (Kinoa Tiltak AS format only)
 // Body: { month: 'YYYYMM', user_id?: 'default' }
@@ -623,7 +745,7 @@ app.post("/api/sheets/sync", async (req, res) => {
     const { month, user_id = 'default' } = req.body;
     if (!month) return res.status(400).json({ error: 'Month (YYYYMM) is required' });
     
-    // Get user settings (contains sheet_url)
+    // Get user settings (contains sheet_url and OAuth tokens)
     const settingsResult = await pool.query(
       'SELECT * FROM user_settings WHERE user_id = $1',
       [user_id]
@@ -632,6 +754,50 @@ app.post("/api/sheets/sync", async (req, res) => {
     
     if (!settings?.sheet_url) {
       return res.status(400).json({ error: 'Google Sheet URL not configured in user settings' });
+    }
+    
+    // Check if user has connected Google account
+    if (!settings.google_access_token) {
+      return res.status(401).json({ 
+        error: 'Google account not connected',
+        message: 'Please connect your Google account first',
+      });
+    }
+    
+    // Check if token is expired and refresh if needed
+    let accessToken = settings.google_access_token;
+    let refreshToken = settings.google_refresh_token;
+    
+    if (settings.google_token_expiry && new Date(settings.google_token_expiry) < new Date()) {
+      // Token expired, refresh it
+      try {
+        const oauth2Client = getOAuth2Client();
+        oauth2Client.setCredentials({
+          refresh_token: refreshToken,
+        });
+        
+        const { credentials } = await oauth2Client.refreshAccessToken();
+        accessToken = credentials.access_token;
+        
+        // Update tokens in database
+        await pool.query(`
+          UPDATE user_settings
+          SET google_access_token = $1,
+              google_token_expiry = $2,
+              updated_at = NOW()
+          WHERE user_id = $3
+        `, [
+          accessToken,
+          credentials.expiry_date ? new Date(credentials.expiry_date) : null,
+          user_id,
+        ]);
+      } catch (refreshError) {
+        console.error('Token refresh error:', refreshError);
+        return res.status(401).json({ 
+          error: 'Failed to refresh Google authentication',
+          message: 'Please reconnect your Google account',
+        });
+      }
     }
     
     // Get active project info
@@ -666,8 +832,8 @@ app.post("/api/sheets/sync", async (req, res) => {
       return res.status(400).json({ error: 'No logs found for the specified month' });
     }
     
-    // Perform sync
-    const result = await syncToKinoaSheet(settings.sheet_url, projectInfo, logs);
+    // Perform sync with OAuth tokens
+    const result = await syncToKinoaSheet(settings.sheet_url, projectInfo, logs, accessToken, refreshToken);
     
     // Log sync to sync_log table
     await pool.query(`
