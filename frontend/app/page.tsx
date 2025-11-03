@@ -467,6 +467,7 @@ export default function Home() {
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [bulkMode, setBulkMode] = useState(false);
+  const [viewMode, setViewMode] = useState<'month' | 'week'>('month');
 
   // Detect active stamp (today's entry with same start/end time)
   const activeStamp = useMemo(() => {
@@ -512,18 +513,34 @@ export default function Home() {
   );
   const allLogs: LogRow[] = (data || []).flat();
   
-  // Filter logs based on search query
+  // Filter logs based on search query and view mode
   const logs = useMemo(() => {
-    if (!searchQuery.trim()) return allLogs;
-    const q = searchQuery.toLowerCase();
-    return allLogs.filter(l => 
-      l.title?.toLowerCase().includes(q) ||
-      l.project?.toLowerCase().includes(q) ||
-      l.place?.toLowerCase().includes(q) ||
-      l.notes?.toLowerCase().includes(q) ||
-      l.activity?.toLowerCase().includes(q)
-    );
-  }, [allLogs, searchQuery]);
+    let filtered = allLogs;
+    
+    // Apply week filter if in week mode
+    if (viewMode === 'week') {
+      const startOfWeek = dayjs().startOf('week');
+      const endOfWeek = dayjs().endOf('week');
+      filtered = filtered.filter(l => {
+        const logDate = dayjs(l.date);
+        return logDate.isAfter(startOfWeek.subtract(1, 'day')) && logDate.isBefore(endOfWeek.add(1, 'day'));
+      });
+    }
+    
+    // Apply search filter
+    if (searchQuery.trim()) {
+      const q = searchQuery.toLowerCase();
+      filtered = filtered.filter(l => 
+        l.title?.toLowerCase().includes(q) ||
+        l.project?.toLowerCase().includes(q) ||
+        l.place?.toLowerCase().includes(q) ||
+        l.notes?.toLowerCase().includes(q) ||
+        l.activity?.toLowerCase().includes(q)
+      );
+    }
+    
+    return filtered;
+  }, [allLogs, searchQuery, viewMode]);
   const totalHours = useMemo(() => {
     return logs.reduce((sum, r) => {
       const d = dayjs(r.date);
@@ -779,9 +796,15 @@ export default function Home() {
         {isLoading ? 'Laster data...' : `${logs.length} loggføringer lastet for ${monthNav}`}
       </div>
       <MigrationBanner onComplete={() => mutateSettings()} />
-      <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mb: 2 }}>
+      <Stack 
+        direction={{ xs: "column", sm: "row" }} 
+        justifyContent="space-between" 
+        alignItems={{ xs: "stretch", sm: "center" }} 
+        spacing={2}
+        sx={{ mb: 2 }}
+      >
         <Typography variant="h4">Smart Stempling</Typography>
-        <Stack direction="row" spacing={1}>
+        <Stack direction="row" spacing={1} flexWrap="wrap" justifyContent={{ xs: "center", sm: "flex-end" }}>
           <IconButton onClick={useThemeMode().toggleMode} size="small" title="Bytt tema">
             {useThemeMode().mode === 'dark' ? <Brightness7Icon /> : <Brightness4Icon />}
           </IconButton>
@@ -848,7 +871,7 @@ export default function Home() {
       )}
 
       <Grid container spacing={2}>
-        <Grid item xs={12} md={4} ref={stemplingRef}>
+        <Grid item xs={12} lg={4} ref={stemplingRef}>
           <Card>
             <CardHeader title="Stempling" />
             <CardContent>
@@ -880,7 +903,14 @@ export default function Home() {
                 <TextField label="Prosjekt / Kunde" value={quickProject} onChange={(e) => setQuickProject(e.target.value)} fullWidth />
                 <TextField label="Sted / Modus" value={quickPlace} onChange={(e) => setQuickPlace(e.target.value)} fullWidth />
                 <TextField label="Notater (valgfritt)" value={quickNotes} onChange={(e) => setQuickNotes(e.target.value)} multiline minRows={2} fullWidth />
-                <Button variant="contained" onClick={handleQuickStamp}>Stemple INN</Button>
+                <Button 
+                  variant="contained" 
+                  onClick={handleQuickStamp}
+                  size="large"
+                  sx={{ py: 1.5 }}
+                >
+                  Stemple INN
+                </Button>
                 <Stack direction="row" spacing={1} flexWrap="wrap">
                   {templates.map((t) => (
                     <Chip 
@@ -903,7 +933,7 @@ export default function Home() {
           </Card>
         </Grid>
 
-        <Grid item xs={12} md={4} ref={manualRef}>
+        <Grid item xs={12} lg={4} ref={manualRef}>
           <Card>
             <CardHeader title="Legg til manuelt" />
             <CardContent>
@@ -972,13 +1002,20 @@ export default function Home() {
                 <TextField label="Prosjekt / Kunde" value={manualProject} onChange={(e) => setManualProject(e.target.value)} fullWidth />
                 <TextField label="Sted / Modus" value={manualPlace} onChange={(e) => setManualPlace(e.target.value)} fullWidth />
                 <TextField label="Notater" value={manualNotes} onChange={(e) => setManualNotes(e.target.value)} multiline minRows={2} fullWidth />
-                <Button variant="contained" onClick={handleAddManual}>Legg til</Button>
+                <Button 
+                  variant="contained" 
+                  onClick={handleAddManual}
+                  size="large"
+                  sx={{ py: 1.5 }}
+                >
+                  Legg til
+                </Button>
               </Stack>
             </CardContent>
           </Card>
         </Grid>
 
-        <Grid item xs={12} md={4} ref={statsRef}>
+        <Grid item xs={12} lg={4} ref={statsRef}>
           <Card>
             <CardHeader title="Månedsfilter og nøkkeltall" />
             <CardContent>
@@ -988,23 +1025,47 @@ export default function Home() {
                   <TextField label="Måned" value={monthNav} onChange={(e) => updateSettings({month_nav: e.target.value.replace(/[^0-9]/g, '').slice(0,6)})} />
                   <Button size="small" onClick={() => updateSettings({month_nav: dayjs(monthNav+"01").add(1, "month").format("YYYYMM")})}>{">"}</Button>
                 </Stack>
-                <Stack direction="row" spacing={1} flexWrap="wrap">
+                <Stack direction="row" spacing={1} flexWrap="wrap" alignItems="center">
+                  <Chip 
+                    label="Uke"
+                    size="small" 
+                    onClick={() => setViewMode('week')}
+                    color={viewMode === 'week' ? "primary" : "default"}
+                    variant={viewMode === 'week' ? "filled" : "outlined"}
+                  />
+                  <Chip 
+                    label="Måned"
+                    size="small" 
+                    onClick={() => setViewMode('month')}
+                    color={viewMode === 'month' ? "primary" : "default"}
+                    variant={viewMode === 'month' ? "filled" : "outlined"}
+                  />
+                  <Divider orientation="vertical" flexItem sx={{ mx: 1 }} />
                   <Chip 
                     label="Denne måneden" 
                     size="small" 
-                    onClick={() => updateSettings({month_nav: dayjs().format("YYYYMM")})}
+                    onClick={() => {
+                      setViewMode('month');
+                      updateSettings({month_nav: dayjs().format("YYYYMM")});
+                    }}
                     color={monthNav === dayjs().format("YYYYMM") ? "primary" : "default"}
                   />
                   <Chip 
                     label="Forrige måned" 
                     size="small" 
-                    onClick={() => updateSettings({month_nav: dayjs().subtract(1, "month").format("YYYYMM")})}
+                    onClick={() => {
+                      setViewMode('month');
+                      updateSettings({month_nav: dayjs().subtract(1, "month").format("YYYYMM")});
+                    }}
                     color={monthNav === dayjs().subtract(1, "month").format("YYYYMM") ? "primary" : "default"}
                   />
                   <Chip 
                     label="Dette året" 
                     size="small" 
-                    onClick={() => updateSettings({month_nav: dayjs().startOf("year").format("YYYYMM")})}
+                    onClick={() => {
+                      setViewMode('month');
+                      updateSettings({month_nav: dayjs().startOf("year").format("YYYYMM")});
+                    }}
                   />
                 </Stack>
                 <Divider />

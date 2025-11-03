@@ -1,5 +1,5 @@
-// Simple offline-first service worker for Smart Stempling
-const CACHE_NAME = 'smart-stempling-v1';
+// Offline-first service worker with background sync for Smart Stempling
+const CACHE_NAME = 'smart-stempling-v2';
 const ASSETS = [
   '/',
   '/manifest.webmanifest',
@@ -36,6 +36,20 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
+  // API requests: network-first, cache API responses
+  if (url.pathname.startsWith('/api/')) {
+    event.respondWith(
+      fetch(req).then((res) => {
+        if (req.method === 'GET' && res.ok) {
+          const copy = res.clone();
+          caches.open(CACHE_NAME).then((c) => c.put(req, copy));
+        }
+        return res;
+      }).catch(() => caches.match(req))
+    );
+    return;
+  }
+
   if (url.origin === location.origin) {
     // static/assets: stale-while-revalidate
     event.respondWith(
@@ -50,3 +64,38 @@ self.addEventListener('fetch', (event) => {
     );
   }
 });
+
+// Background sync for offline log creation
+self.addEventListener('sync', (event) => {
+  if (event.tag === 'sync-logs') {
+    event.waitUntil(syncPendingLogs());
+  }
+});
+
+async function syncPendingLogs() {
+  try {
+    const cache = await caches.open(CACHE_NAME);
+    const keys = await cache.keys();
+    const pending = keys.filter(k => k.url.includes('__pending__'));
+    
+    for (const req of pending) {
+      try {
+        const res = await cache.match(req);
+        const data = await res.json();
+        const actualUrl = req.url.replace('__pending__', '');
+        
+        await fetch(actualUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(data)
+        });
+        
+        await cache.delete(req);
+      } catch (e) {
+        console.error('Sync failed for', req.url, e);
+      }
+    }
+  } catch (e) {
+    console.error('Background sync failed', e);
+  }
+}
