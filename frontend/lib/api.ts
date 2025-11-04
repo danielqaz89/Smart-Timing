@@ -122,6 +122,52 @@ export async function sendTimesheet(opts: { month: string; senderEmail: string; 
   return res.json();
 }
 
+export async function sendTimesheetViaGmail(opts: { month: string; recipientEmail: string; format: 'xlsx' | 'pdf'; user_id?: string }) {
+  const res = await fetch(`${API_BASE}/api/timesheet/send-gmail`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(opts),
+  });
+  if (!res.ok) {
+    const errorData = await res.json().catch(() => ({ error: 'Failed to send timesheet via Gmail' }));
+    throw new Error(errorData.error || 'Failed to send timesheet via Gmail');
+  }
+  return res.json();
+}
+
+export async function getGoogleAuthStatus(userId = 'default') {
+  const res = await fetch(`${API_BASE}/api/auth/google/status?user_id=${userId}`, { cache: 'no-store' });
+  if (!res.ok) throw new Error('Failed to check Google auth status');
+  return res.json();
+}
+
+export async function initiateGoogleAuth(scopes: 'base' | 'gmail' = 'base', userId = 'default') {
+  const res = await fetch(`${API_BASE}/api/auth/google?user_id=${userId}&scopes=${scopes}`, { cache: 'no-store' });
+  if (!res.ok) throw new Error('Failed to initiate Google auth');
+  const data = await res.json();
+  return data.authUrl;
+}
+
+export async function generateMonthlyReport(opts: { 
+  month: string; 
+  userId?: string; 
+  template?: 'auto' | 'standard' | 'miljøarbeider';
+  customIntro?: string;
+  customNotes?: string;
+}) {
+  const { month, userId = 'default', template = 'auto', customIntro, customNotes } = opts;
+  const res = await fetch(`${API_BASE}/api/reports/generate`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ month, user_id: userId, template, customIntro, customNotes }),
+  });
+  if (!res.ok) {
+    const errorData = await res.json().catch(() => ({ error: 'Failed to generate report' }));
+    throw new Error(errorData.error || errorData.message || 'Failed to generate report');
+  }
+  return res.json();
+}
+
 // ===== USER SETTINGS =====
 export type UserSettings = {
   id?: number;

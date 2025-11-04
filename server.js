@@ -7,6 +7,7 @@ import ExcelJS from "exceljs";
 import PDFDocument from "pdfkit";
 import nodemailer from "nodemailer";
 import { syncToKinoaSheet, isKinoaCompany, getOAuth2Client } from "./lib/googleSheets.js";
+import { google } from "googleapis";
 dotenv.config();
 const app = express();
 const allowedOrigins = (process.env.FRONTEND_ORIGINS || "https://smart-timing-git-main-daniel-qazis-projects.vercel.app,http://localhost:3000,http://127.0.0.1:3000")
@@ -269,6 +270,154 @@ app.post("/api/timesheet/send", async (req, res) => {
     res.status(500).json({ error: String(e) });
   }
 });
+
+// POST /api/timesheet/send-gmail - Send timesheet via Gmail API using OAuth2
+// Body: { month: 'YYYYMM', recipientEmail, format: 'xlsx'|'pdf', user_id?: 'default' }
+app.post("/api/timesheet/send-gmail", async (req, res) => {
+  try {
+    const { month, recipientEmail, format, user_id = 'default' } = req.body || {};
+    if (!month || !recipientEmail || !format) {
+      return res.status(400).json({ error: "Missing required fields" });
+    }
+
+    // Fetch user's Google OAuth tokens from database
+    const result = await pool.query(
+      'SELECT google_access_token, google_refresh_token, google_token_expiry FROM user_settings WHERE user_id = $1',
+      [user_id]
+    );
+    
+    const settings = result.rows[0];
+    if (!settings?.google_access_token) {
+      return res.status(401).json({ error: 'Not authenticated with Google. Please connect your Google account first.' });
+    }
+
+    // Set up OAuth2 client with user's tokens
+    const oauth2Client = getOAuth2Client();
+    oauth2Client.setCredentials({
+      access_token: settings.google_access_token,
+      refresh_token: settings.google_refresh_token,
+      expiry_date: settings.google_token_expiry ? new Date(settings.google_token_expiry).getTime() : null,
+    });
+
+    // Refresh token if expired
+    if (settings.google_token_expiry && new Date(settings.google_token_expiry) < new Date()) {
+      if (!settings.google_refresh_token) {
+        return res.status(401).json({ error: 'Token expired. Please reconnect your Google account.' });
+      }
+      try {
+        const { credentials } = await oauth2Client.refreshAccessToken();
+        oauth2Client.setCredentials(credentials);
+        // Update tokens in database
+        await pool.query(`
+          UPDATE user_settings
+          SET google_access_token = $1,
+              google_token_expiry = $2,
+              updated_at = NOW()
+          WHERE user_id = $3
+        `, [credentials.access_token, credentials.expiry_date ? new Date(credentials.expiry_date) : null, user_id]);
+      } catch (refreshError) {
+        console.error('Token refresh failed:', refreshError);
+        return res.status(401).json({ error: 'Failed to refresh token. Please reconnect your Google account.' });
+      }
+    }
+
+    // Fetch logs for the month
+    const rows = await getLogsForMonth(month);
+    if (rows.length === 0) {
+      return res.status(400).json({ error: 'No logs found for this month' });
+    }
+
+    // Generate file buffer
+    let buffer, filename, mimeType;
+    if (format === 'xlsx') {
+      const wb = new ExcelJS.Workbook();
+      const ws = wb.addWorksheet(`Timeliste ${month}`);
+      ws.columns = [
+        { header: 'Dato', key: 'date', width: 12 },
+        { header: 'Inn', key: 'start_time', width: 8 },
+        { header: 'Ut', key: 'end_time', width: 8 },
+        { header: 'Pause', key: 'break_hours', width: 8 },
+        { header: 'Aktivitet', key: 'activity', width: 12 },
+        { header: 'Tittel', key: 'title', width: 24 },
+        { header: 'Prosjekt', key: 'project', width: 18 },
+        { header: 'Sted', key: 'place', width: 14 },
+        { header: 'Notater', key: 'notes', width: 30 },
+      ];
+      rows.forEach(r => ws.addRow(r));
+      buffer = await wb.xlsx.writeBuffer();
+      filename = `timeliste-${month}.xlsx`;
+      mimeType = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+    } else if (format === 'pdf') {
+      const doc = new PDFDocument({ margin: 40 });
+      const chunks = [];
+      doc.on('data', (d) => chunks.push(d));
+      await new Promise((resolve) => {
+        doc.on('end', resolve);
+        doc.fontSize(18).text(`Timeliste ${month}`, { align: 'left' }).moveDown();
+        doc.fontSize(10);
+        rows.forEach((r) => {
+          doc.text(`${r.date}  ${String(r.start_time).slice(0,5)}–${String(r.end_time).slice(0,5)}  pause:${r.break_hours}  ${r.activity||''}  ${r.title||''}  ${r.project||''}`);
+        });
+        doc.end();
+      });
+      buffer = Buffer.concat(chunks);
+      filename = `timeliste-${month}.pdf`;
+      mimeType = 'application/pdf';
+    } else {
+      return res.status(400).json({ error: 'Invalid format' });
+    }
+
+    // Get user's email from Google
+    const oauth2 = google.oauth2({ version: 'v2', auth: oauth2Client });
+    const userInfo = await oauth2.userinfo.get();
+    const senderEmail = userInfo.data.email;
+
+    // Create email message in RFC 2822 format
+    const boundary = '----=_Part_' + Date.now();
+    const messageParts = [
+      `From: ${senderEmail}`,
+      `To: ${recipientEmail}`,
+      `Subject: Timeliste ${month}`,
+      'MIME-Version: 1.0',
+      `Content-Type: multipart/mixed; boundary="${boundary}"`,
+      '',
+      `--${boundary}`,
+      'Content-Type: text/plain; charset=UTF-8',
+      '',
+      `Hei,\n\nVedlagt timeliste for ${month}.\n\nMed vennlig hilsen,\n${senderEmail}`,
+      '',
+      `--${boundary}`,
+      `Content-Type: ${mimeType}; name="${filename}"`,
+      'Content-Transfer-Encoding: base64',
+      `Content-Disposition: attachment; filename="${filename}"`,
+      '',
+      buffer.toString('base64'),
+      `--${boundary}--`,
+    ].join('\r\n');
+
+    // Encode message for Gmail API
+    const encodedMessage = Buffer.from(messageParts)
+      .toString('base64')
+      .replace(/\+/g, '-')
+      .replace(/\//g, '_')
+      .replace(/=+$/, '');
+
+    // Send via Gmail API
+    const gmail = google.gmail({ version: 'v1', auth: oauth2Client });
+    await gmail.users.messages.send({
+      userId: 'me',
+      requestBody: {
+        raw: encodedMessage,
+      },
+    });
+
+    res.json({ ok: true, message: 'Timesheet sent successfully via Gmail' });
+  } catch (e) {
+    console.error('Gmail send error:', e);
+    res.status(500).json({ error: String(e) });
+  }
+});
+
 app.post("/api/logs",async(req,r)=>{
   const {date,start,end,breakHours,activity,title,project,place,notes,expenseCoverage}=req.body;
   const res=await pool.query(
@@ -627,14 +776,19 @@ app.get("/api/auth/google", async (req, res) => {
     const user_id = req.query.user_id || 'default';
     const oauth2Client = getOAuth2Client();
     
-    // Generate auth URL with necessary scopes
+    // Request all scopes upfront for single authorization
+    const scopes = [
+      'https://www.googleapis.com/auth/spreadsheets',
+      'https://www.googleapis.com/auth/documents', // For Google Docs
+      'https://www.googleapis.com/auth/drive.readonly', // For Google Picker
+      'https://www.googleapis.com/auth/gmail.send', // For sending emails via Gmail
+      'https://www.googleapis.com/auth/userinfo.email', // For user email
+    ];
+    
+    // Generate auth URL with all necessary scopes
     const authUrl = oauth2Client.generateAuthUrl({
       access_type: 'offline', // Get refresh token
-      scope: [
-        'https://www.googleapis.com/auth/spreadsheets',
-        'https://www.googleapis.com/auth/userinfo.email',
-        'https://www.googleapis.com/auth/drive.readonly', // For Google Picker
-      ],
+      scope: scopes,
       state: user_id, // Pass user_id through state parameter
       prompt: 'consent', // Force consent screen to get refresh token
     });
@@ -923,6 +1077,363 @@ app.post("/api/sheets/sync", async (req, res) => {
     
     res.status(500).json({ 
       error: 'Failed to sync to Google Sheets',
+      details: String(e),
+    });
+  }
+});
+
+// ===== GOOGLE DOCS REPORT ENDPOINT =====
+// POST /api/reports/generate - Generate monthly report as Google Doc
+// Body: { month: 'YYYYMM', user_id?: 'default' }
+app.post("/api/reports/generate", async (req, res) => {
+  try {
+    const { month, user_id = 'default', template = 'auto', customIntro, customNotes } = req.body;
+    if (!month) return res.status(400).json({ error: 'Month (YYYYMM) is required' });
+    
+    // Get user settings and OAuth tokens
+    const settingsResult = await pool.query(
+      'SELECT * FROM user_settings WHERE user_id = $1',
+      [user_id]
+    );
+    const settings = settingsResult.rows[0];
+    
+    if (!settings?.google_access_token) {
+      return res.status(401).json({ 
+        error: 'Google account not connected',
+        message: 'Please connect your Google account first',
+      });
+    }
+    
+    // Set up OAuth2 client with user's tokens
+    const oauth2Client = getOAuth2Client();
+    oauth2Client.setCredentials({
+      access_token: settings.google_access_token,
+      refresh_token: settings.google_refresh_token,
+      expiry_date: settings.google_token_expiry ? new Date(settings.google_token_expiry).getTime() : null,
+    });
+    
+    // Refresh token if expired
+    if (settings.google_token_expiry && new Date(settings.google_token_expiry) < new Date()) {
+      if (!settings.google_refresh_token) {
+        return res.status(401).json({ error: 'Token expired. Please reconnect your Google account.' });
+      }
+      try {
+        const { credentials } = await oauth2Client.refreshAccessToken();
+        oauth2Client.setCredentials(credentials);
+        await pool.query(`
+          UPDATE user_settings
+          SET google_access_token = $1,
+              google_token_expiry = $2,
+              updated_at = NOW()
+          WHERE user_id = $3
+        `, [credentials.access_token, credentials.expiry_date ? new Date(credentials.expiry_date) : null, user_id]);
+      } catch (refreshError) {
+        console.error('Token refresh failed:', refreshError);
+        return res.status(401).json({ error: 'Failed to refresh token. Please reconnect your Google account.' });
+      }
+    }
+    
+    // Get active project info
+    const projectResult = await pool.query(
+      'SELECT * FROM project_info WHERE user_id = $1 AND is_active = true LIMIT 1',
+      [user_id]
+    );
+    const projectInfo = projectResult.rows[0];
+    
+    if (!projectInfo) {
+      return res.status(400).json({ error: 'No active project found. Please set up your project first.' });
+    }
+    
+    // Determine template type based on project info
+    let isMiljøarbeider = false;
+    if (template === 'auto') {
+      // Auto-detect from konsulent, tiltak, or bedrift fields
+      const searchText = `${projectInfo.konsulent || ''} ${projectInfo.tiltak || ''} ${projectInfo.bedrift || ''}`.toLowerCase();
+      isMiljøarbeider = searchText.includes('miljøarbeider') || 
+                       searchText.includes('sosialarbeider') ||
+                       searchText.includes('aktivitør') ||
+                       searchText.includes('miljøterapeut') ||
+                       searchText.includes('tiltaksleder');
+    } else if (template === 'miljøarbeider') {
+      isMiljøarbeider = true;
+    }
+    // else template === 'standard', isMiljøarbeider stays false
+    
+    // Get logs for the specified month
+    const logsResult = await pool.query(
+      `SELECT * FROM log_row 
+       WHERE user_id = $1 
+       AND to_char(date, 'YYYYMM') = $2 
+       ORDER BY date ASC, start_time ASC`,
+      [user_id, String(month)]
+    );
+    const logs = logsResult.rows;
+    
+    if (logs.length === 0) {
+      return res.status(400).json({ error: 'No logs found for the specified month' });
+    }
+    
+    // Calculate statistics
+    const totalHours = logs.reduce((sum, log) => {
+      const start = new Date(`2000-01-01T${log.start_time}`);
+      const end = new Date(`2000-01-01T${log.end_time}`);
+      const hours = (end - start) / (1000 * 60 * 60) - (log.break_hours || 0);
+      return sum + hours;
+    }, 0);
+    
+    const workDays = new Set(logs.map(log => log.date.toISOString().split('T')[0])).size;
+    const meetings = logs.filter(log => log.activity === 'Meeting').length;
+    const workSessions = logs.filter(log => log.activity === 'Work').length;
+    
+    // Format month for display
+    const monthNames = ['januar', 'februar', 'mars', 'april', 'mai', 'juni', 'juli', 'august', 'september', 'oktober', 'november', 'desember'];
+    const year = month.slice(0, 4);
+    const monthNum = parseInt(month.slice(4, 6), 10) - 1;
+    const monthName = monthNames[monthNum];
+    const displayMonth = `${monthName} ${year}`;
+    
+    // Create Google Docs API client
+    const docs = google.docs({ version: 'v1', auth: oauth2Client });
+    const drive = google.drive({ version: 'v3', auth: oauth2Client });
+    
+    // Create new document
+    const createResponse = await docs.documents.create({
+      requestBody: {
+        title: `Rapport for ${displayMonth} - ${projectInfo.konsulent}`,
+      },
+    });
+    
+    const documentId = createResponse.data.documentId;
+    const documentUrl = `https://docs.google.com/document/d/${documentId}/edit`;
+    
+    // Build document content with role-specific formatting
+    const requests = [];
+    
+    // Title - apply formatting after text insertion
+    requests.push({
+      insertText: {
+        location: { index: 1 },
+        text: isMiljøarbeider ? 
+          `Aktivitetsrapport for Miljøarbeider\n${displayMonth}\n\n` :
+          `Månedlig Rapport\n${displayMonth}\n\n`,
+      },
+    });
+    
+    // Add privacy notice for miljøarbeider reports
+    if (isMiljøarbeider) {
+      requests.push({
+        insertText: {
+          location: { index: 1 },
+          text: `PERSONVERN: Denne rapporten inneholder ingen personidentifiserbar informasjon i tråd med GDPR-krav. Klienter er omtalt med generelle betegnelser.\n\n`,
+        },
+      });
+    }
+    
+    // Add custom introduction if provided
+    if (customIntro) {
+      requests.push({
+        insertText: {
+          location: { index: 1 },
+          text: `${customIntro}\n\n`,
+        },
+      });
+    }
+    
+    // Project information section
+    requests.push({
+      insertText: {
+        location: { index: 1 },
+        text: `Prosjektinformasjon\n`,
+      },
+    });
+    
+    requests.push(
+      {
+        insertText: {
+          location: { index: 1 },
+          text: `Konsulent: ${projectInfo.konsulent || 'N/A'}\n`,
+        },
+      },
+      {
+        insertText: {
+          location: { index: 1 },
+          text: `Bedrift: ${projectInfo.bedrift || 'N/A'}\n`,
+        },
+      },
+      {
+        insertText: {
+          location: { index: 1 },
+          text: `Oppdragsgiver: ${projectInfo.oppdragsgiver || 'N/A'}\n`,
+        },
+      },
+      {
+        insertText: {
+          location: { index: 1 },
+          text: `Tiltak: ${projectInfo.tiltak || 'N/A'}\n`,
+        },
+      },
+      {
+        insertText: {
+          location: { index: 1 },
+          text: `Klient ID: ${projectInfo.klient_id || 'N/A'}\n`,
+        },
+      },
+      {
+        insertText: {
+          location: { index: 1 },
+          text: `Periode: ${projectInfo.periode || 'N/A'}\n\n`,
+        },
+      }
+    );
+      // Statistics - role-specific
+      {
+        insertText: {
+          location: { index: 1 },
+          text: `Sammendrag\n`,
+        },
+      },
+      {
+        insertText: {
+          location: { index: 1 },
+          text: `Totalt antall timer: ${totalHours.toFixed(2)}\n`,
+        },
+      },
+      {
+        insertText: {
+          location: { index: 1 },
+          text: `Arbeidsdager: ${workDays}\n`,
+        },
+      },
+    );
+    
+    // Add role-specific statistics
+    if (isMiljøarbeider) {
+      requests.push(
+        {
+          insertText: {
+            location: { index: 1 },
+            text: `Klientmøter: ${meetings} møter\n`,
+          },
+        },
+        {
+          insertText: {
+            location: { index: 1 },
+            text: `Aktiviteter: ${workSessions} aktiviteter\n\n`,
+          },
+        }
+      );
+    } else {
+      requests.push(
+        {
+          insertText: {
+            location: { index: 1 },
+            text: `Arbeid: ${workSessions} økter\n`,
+          },
+        },
+        {
+          insertText: {
+            location: { index: 1 },
+            text: `Møter: ${meetings} møter\n\n`,
+          },
+        }
+      );
+    }
+      // Logs table header - role-specific
+      requests.push({
+        insertText: {
+          location: { index: 1 },
+          text: isMiljøarbeider ? `Aktivitetslogg\n` : `Detaljert Logg\n`,
+        },
+      });
+      
+      if (isMiljøarbeider) {
+        requests.push({
+          insertText: {
+            location: { index: 1 },
+            text: `Dato\tTid\tVarighet\tType\tBeskrivelse\tKlient\tSted\tNotater\n`,
+          },
+        });
+      } else {
+        requests.push({
+          insertText: {
+            location: { index: 1 },
+            text: `Dato\tInn\tUt\tPause\tAktivitet\tTittel\tProsjekt\tSted\n`,
+          },
+        });
+      }
+    
+    // Add log entries - role-specific formatting
+    logs.forEach(log => {
+      const dateStr = new Date(log.date).toLocaleDateString('no-NO');
+      const startTime = String(log.start_time).slice(0, 5);
+      const endTime = String(log.end_time).slice(0, 5);
+      const breakHours = log.break_hours || 0;
+      const activity = log.activity === 'Work' ? 'Arbeid' : 'Møte';
+      const title = log.title || '-';
+      const project = log.project || '-';
+      const place = log.place || '-';
+      const notes = log.notes || '-';
+      
+      // Calculate duration
+      const start = new Date(`2000-01-01T${log.start_time}`);
+      const end = new Date(`2000-01-01T${log.end_time}`);
+      const durationHours = ((end - start) / (1000 * 60 * 60) - breakHours).toFixed(2);
+      
+      if (isMiljøarbeider) {
+        // Miljøarbeider format: focus on activities and client interactions
+        const activityType = log.activity === 'Meeting' ? 'Klientmøte' : 'Aktivitet';
+        requests.push({
+          insertText: {
+            location: { index: 1 },
+            text: `${dateStr}\t${startTime}-${endTime}\t${durationHours}t\t${activityType}\t${title}\t${project}\t${place}\t${notes}\n`,
+          },
+        });
+      } else {
+        // Standard format
+        requests.push({
+          insertText: {
+            location: { index: 1 },
+            text: `${dateStr}\t${startTime}\t${endTime}\t${breakHours}h\t${activity}\t${title}\t${project}\t${place}\n`,
+          },
+        });
+      }
+    });
+    
+    // Add custom notes at the end if provided
+    if (customNotes) {
+      requests.push({
+        insertText: {
+          location: { index: 1 },
+          text: `\n\nTilleggsnotater\n${customNotes}\n`,
+        },
+      });
+    }
+    
+    // Apply formatting and content
+    await docs.documents.batchUpdate({
+      documentId,
+      requestBody: { requests: requests.reverse() },
+    });
+    
+    res.json({
+      success: true,
+      documentId,
+      documentUrl,
+      message: `Rapport opprettet for ${displayMonth}`,
+      reportType: isMiljøarbeider ? 'miljøarbeider' : 'standard',
+      stats: {
+        totalHours,
+        workDays,
+        meetings,
+        workSessions,
+        logCount: logs.length,
+      },
+    });
+    
+  } catch (e) {
+    console.error('Google Docs report generation error:', e);
+    res.status(500).json({ 
+      error: 'Failed to generate report',
       details: String(e),
     });
   }

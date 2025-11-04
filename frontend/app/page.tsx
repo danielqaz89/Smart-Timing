@@ -44,7 +44,7 @@ import EditIcon from "@mui/icons-material/Edit";
 import SaveIcon from "@mui/icons-material/Save";
 import CloseIcon from "@mui/icons-material/Close";
 import dayjs from "dayjs";
-import { API_BASE, createLog, deleteLog, fetchLogs, createLogsBulk, webhookTestRelay, deleteLogsMonth, deleteLogsAll, updateLog, sendTimesheet, type LogRow } from "../lib/api";
+import { API_BASE, createLog, deleteLog, fetchLogs, createLogsBulk, webhookTestRelay, deleteLogsMonth, deleteLogsAll, updateLog, sendTimesheet, sendTimesheetViaGmail, getGoogleAuthStatus, generateMonthlyReport, type LogRow } from "../lib/api";
 import { exportToPDF } from "../lib/pdfExport";
 import { useThemeMode } from "../components/ThemeRegistry";
 import Brightness4Icon from "@mui/icons-material/Brightness4";
@@ -71,6 +71,20 @@ function parseRate(text: string) {
 }
 function formatRate(n: number) {
   try { return nbFormatter.format(n || 0); } catch { return String(n || 0); }
+}
+
+// Helper to format YYYYMM as "Month YYYY" in Norwegian
+function formatMonthLabel(yyyymm: string): string {
+  if (!yyyymm || yyyymm.length !== 6) return yyyymm;
+  const year = yyyymm.slice(0, 4);
+  const month = yyyymm.slice(4, 6);
+  const monthNames = [
+    "januar", "februar", "mars", "april", "mai", "juni",
+    "juli", "august", "september", "oktober", "november", "desember"
+  ];
+  const monthIndex = parseInt(month, 10) - 1;
+  const monthName = monthNames[monthIndex] || month;
+  return `${monthName} ${year}`;
 }
 
 function parseCsv(text: string) {
@@ -347,39 +361,564 @@ function MonthBulk({ onDone, onToast }: { onDone: () => Promise<void> | void, on
   );
 }
 
+function ReportGenerator({ month, onToast }: { month: string; onToast: (msg: string, sev?: any) => void }) {
+  const [busy, setBusy] = useState(false);
+  const [googleConnected, setGoogleConnected] = useState(false);
+  const [checkingAuth, setCheckingAuth] = useState(true);
+  const [template, setTemplate] = useState<'auto' | 'standard' | 'miljøarbeider'>('auto');
+  const [showComposer, setShowComposer] = useState(false);
+  const [customIntro, setCustomIntro] = useState('');
+  const [customNotes, setCustomNotes] = useState('');
+  const [detectedNames, setDetectedNames] = useState<string[]>([]);
+  const [showPreview, setShowPreview] = useState(false);
+  const [previewChanges, setPreviewChanges] = useState<{ original: string; corrected: string; replacements: Array<{ from: string; to: string }> }>({ original: '', corrected: '', replacements: [] });
+
+  // Function to detect potential names in text
+  function detectPotentialNames(text: string): string[] {
+    if (!text) return [];
+    
+    // Common Norwegian first names pattern: Capitalized word 2-15 chars
+    const words = text.split(/\s+/);
+    const potentialNames: string[] = [];
+    
+    // Norwegian name patterns
+    const namePattern = /^[A-ZÆØÅ][a-zæøå]{1,14}$/;
+    
+    // Common words to exclude (not names)
+    const excludeWords = new Set([
+      'Dette', 'Denne', 'Gutten', 'Jenta', 'Brukeren', 'Deltakeren', 'Klienten',
+      'Personen', 'Ungdom', 'Barnet', 'Familien', 'Gruppen', 'Aktivitet',
+      'Møte', 'Arbeid', 'Rapport', 'Periode', 'Måned', 'I', 'Vi', 'De', 'Det',
+      'En', 'Et', 'Og', 'Men', 'For', 'Med', 'Hos', 'Til', 'Fra', 'Om',
+    ]);
+    
+    for (const word of words) {
+      // Check if word matches name pattern and is not an excluded word
+      if (namePattern.test(word) && !excludeWords.has(word)) {
+        // Additional check: if followed by another capitalized word, likely a full name
+        const index = words.indexOf(word);
+        if (index < words.length - 1 && namePattern.test(words[index + 1])) {
+          potentialNames.push(`${word} ${words[index + 1]}`);
+        } else {
+          potentialNames.push(word);
+        }
+      }
+    }
+    
+    return [...new Set(potentialNames)];
+  }
+
+  // Check for names when text changes (miljøarbeider template only)
+  useEffect(() => {
+    if (template === 'miljøarbeider' || template === 'auto') {
+      const introNames = detectPotentialNames(customIntro);
+      const notesNames = detectPotentialNames(customNotes);
+      setDetectedNames([...new Set([...introNames, ...notesNames])]);
+    } else {
+      setDetectedNames([]);
+    }
+  }, [customIntro, customNotes, template]);
+
+  // Show preview of corrections
+  function showCorrectionPreview() {
+    let correctedIntro = customIntro;
+    let correctedNotes = customNotes;
+    const replacements: Array<{ from: string; to: string }> = [];
+    
+    // Function to determine appropriate replacement based on context
+    function getReplacementTerm(name: string, context: string): string {
+      const lowerContext = context.toLowerCase();
+      const lowerName = name.toLowerCase();
+      
+      // Check if it's a full name (two words)
+      const isFullName = name.split(' ').length === 2;
+      
+      // Context-based replacements
+      if (lowerContext.includes('gutt') || lowerContext.includes('han ') || lowerContext.includes('hans ')) {
+        return 'gutten';
+      }
+      if (lowerContext.includes('jent') || lowerContext.includes('hun ') || lowerContext.includes('hennes ')) {
+        return 'jenta';
+      }
+      if (lowerContext.includes('barn')) {
+        return 'barnet';
+      }
+      if (lowerContext.includes('ungdom')) {
+        return 'ungdommen';
+      }
+      if (lowerContext.includes('familie')) {
+        return 'familien';
+      }
+      if (lowerContext.includes('klient') || lowerContext.includes('bruker')) {
+        return 'brukeren';
+      }
+      if (lowerContext.includes('deltaker')) {
+        return 'deltakeren';
+      }
+      
+      // Default replacements based on name characteristics
+      // Try to preserve capitalization of first letter if at sentence start
+      const isStartOfSentence = context.match(new RegExp(`[\.\?\!]\\s*${name}`));
+      const defaultTerm = isFullName ? 'Brukeren' : 'personen';
+      
+      return isStartOfSentence ? defaultTerm.charAt(0).toUpperCase() + defaultTerm.slice(1) : defaultTerm;
+    }
+    
+    // Replace names and track changes
+    detectedNames.forEach(name => {
+      const introContextMatch = customIntro.match(new RegExp(`.{0,50}${name}.{0,50}`, 'i'));
+      const introContext = introContextMatch ? introContextMatch[0] : '';
+      const introReplacement = getReplacementTerm(name, introContext);
+      
+      if (correctedIntro.includes(name)) {
+        replacements.push({ from: name, to: introReplacement });
+        correctedIntro = correctedIntro.replace(new RegExp(name, 'g'), introReplacement);
+      }
+    });
+    
+    detectedNames.forEach(name => {
+      const notesContextMatch = customNotes.match(new RegExp(`.{0,50}${name}.{0,50}`, 'i'));
+      const notesContext = notesContextMatch ? notesContextMatch[0] : '';
+      const notesReplacement = getReplacementTerm(name, notesContext);
+      
+      if (correctedNotes.includes(name)) {
+        if (!replacements.find(r => r.from === name)) {
+          replacements.push({ from: name, to: notesReplacement });
+        }
+        correctedNotes = correctedNotes.replace(new RegExp(name, 'g'), notesReplacement);
+      }
+    });
+    
+    // Combine intro and notes for preview
+    const originalText = `${customIntro}\n\n${customNotes}`.trim();
+    const correctedText = `${correctedIntro}\n\n${correctedNotes}`.trim();
+    
+    setPreviewChanges({ original: originalText, corrected: correctedText, replacements });
+    setShowPreview(true);
+  }
+  
+  // Apply the corrections
+  function applyCorrections() {
+    const lines = previewChanges.corrected.split('\n\n');
+    setCustomIntro(lines[0] || '');
+    setCustomNotes(lines[1] || '');
+    setShowPreview(false);
+    onToast('Navn erstattet med generelle betegnelser', 'success');
+  }
+
+  // Check Google auth status on mount
+  useEffect(() => {
+    (async () => {
+      try {
+        const status = await getGoogleAuthStatus();
+        setGoogleConnected(status.isConnected && !status.needsReauth);
+      } catch (e) {
+        console.error('Failed to check Google auth:', e);
+      } finally {
+        setCheckingAuth(false);
+      }
+    })();
+  }, []);
+
+  async function handleGenerateReport() {
+    setBusy(true);
+    try {
+      const result = await generateMonthlyReport({
+        month,
+        template,
+        customIntro: customIntro.trim() || undefined,
+        customNotes: customNotes.trim() || undefined,
+      });
+      onToast(`Rapport opprettet! Åpnes i ny fane...`, 'success');
+      // Open document in new tab
+      window.open(result.documentUrl, '_blank');
+      // Reset composer
+      setShowComposer(false);
+      setCustomIntro('');
+      setCustomNotes('');
+    } catch (e: any) {
+      onToast(`Kunne ikke generere rapport: ${e?.message || e}`, 'error');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (checkingAuth) {
+    return <CircularProgress size={24} />;
+  }
+
+  if (!googleConnected) {
+    return (
+      <Typography variant="body2" color="text.secondary">
+        Koble til Google-kontoen din for å generere rapporter.
+      </Typography>
+    );
+  }
+
+  if (!showComposer) {
+    return (
+      <Stack spacing={2}>
+        <Typography variant="body2">
+          Generer en profesjonell månedsrapport i Google Docs med prosjektinfo, statistikk og detaljert logg.
+        </Typography>
+        <Button 
+          variant="contained" 
+          onClick={() => setShowComposer(true)}
+        >
+          Skriv rapport
+        </Button>
+      </Stack>
+    );
+  }
+
+  return (
+    <Stack spacing={3}>
+      <Stack direction="row" spacing={2} alignItems="center">
+        <Typography variant="h6" sx={{ flex: 1 }}>Rapportsammenstilling</Typography>
+        <Button size="small" onClick={() => setShowComposer(false)}>Avbryt</Button>
+      </Stack>
+
+      {/* Template Selection */}
+      <FormControl fullWidth>
+        <InputLabel>Rapportmal</InputLabel>
+        <Select
+          label="Rapportmal"
+          value={template}
+          onChange={(e) => setTemplate(e.target.value as any)}
+        >
+          <MenuItem value="auto">Automatisk (basert på prosjekt)</MenuItem>
+          <MenuItem value="standard">Standard</MenuItem>
+          <MenuItem value="miljøarbeider">Miljøarbeider / Sosialarbeider</MenuItem>
+        </Select>
+      </FormControl>
+
+      <Typography variant="caption" color="text.secondary">
+        {template === 'auto' && 'Malen velges automatisk basert på din rolle i prosjektet.'}
+        {template === 'standard' && 'Standard rapport med fokus på arbeidstimer og møter.'}
+        {template === 'miljøarbeider' && 'Aktivitetsrapport med fokus på klientmøter og sosiale aktiviteter.'}
+      </Typography>
+      
+      {/* Privacy Guidelines for Miljøarbeider */}
+      {(template === 'miljøarbeider' || (template === 'auto' && true)) && (
+        <Stack spacing={1} sx={{ p: 2, bgcolor: 'warning.light', borderRadius: 1, border: '1px solid', borderColor: 'warning.main' }}>
+          <Typography variant="subtitle2" sx={{ fontWeight: 'bold' }}>⚠️ Personvernretningslinjer for miljøarbeider</Typography>
+          <Typography variant="body2" component="div">
+            <strong>Viktig:</strong> Rapporter skal ikke inneholde personopplysninger.
+          </Typography>
+          <Typography variant="body2" component="div">
+            • <strong>Ikke bruk navn</strong> på klienter<br/>
+            • Bruk heller generelle betegnelser: "Gutten", "Jenta", "Brukeren", "Deltakeren"<br/>
+            • Unngå detaljer som kan identifisere personer (alder, adresse, spesifikke situasjoner)<br/>
+            • Fokuser på aktiviteter og utvikling, ikke identitet<br/>
+            • Vurder anonymisering av steder hvis nødvendig
+          </Typography>
+          <Typography variant="caption" sx={{ fontStyle: 'italic', mt: 1 }}>
+            Disse retningslinjene sikrer GDPR-etterlevelse og beskytter klientenes personvern.
+          </Typography>
+        </Stack>
+      )}
+      
+      {/* Name Detection Warning */}
+      {detectedNames.length > 0 && (template === 'miljøarbeider' || template === 'auto') && (
+        <Stack spacing={2} sx={{ 
+          p: 2, 
+          bgcolor: 'error.light', 
+          borderRadius: 1, 
+          border: '2px solid', 
+          borderColor: 'error.main',
+          '@keyframes pulse': {
+            '0%, 100%': { opacity: 1 },
+            '50%': { opacity: 0.8 },
+          },
+          animation: 'pulse 2s ease-in-out infinite'
+        }}>
+          <Typography variant="subtitle2" sx={{ fontWeight: 'bold', color: 'error.dark' }}>
+            🚨 ADVARSEL: Mulige navn oppdaget!
+          </Typography>
+          <Typography variant="body2" sx={{ color: 'error.dark' }}>
+            Teksten din ser ut til å inneholde navn som kan identifisere personer:
+          </Typography>
+          <Stack direction="row" spacing={1} flexWrap="wrap" sx={{ gap: 1 }}>
+            {detectedNames.map((name, idx) => (
+              <Chip 
+                key={idx} 
+                label={name} 
+                color="error" 
+                size="small"
+                sx={{ fontWeight: 'bold' }}
+              />
+            ))}
+          </Stack>
+          <Typography variant="body2" sx={{ fontWeight: 'bold', color: 'error.dark' }}>
+            Skal vi automatisk erstatte disse navnene med generelle betegnelser?
+          </Typography>
+          <Stack direction="row" spacing={2}>
+            <Button 
+              variant="contained" 
+              color="success"
+              size="small"
+              onClick={showCorrectionPreview}
+              sx={{ fontWeight: 'bold' }}
+            >
+              ✅ Fiks automatisk
+            </Button>
+            <Typography variant="caption" sx={{ alignSelf: 'center', color: 'error.dark', fontStyle: 'italic' }}>
+              Eksempel: "{detectedNames[0]}" → "Gutten" / "Jenta" / "Brukeren"
+            </Typography>
+          </Stack>
+        </Stack>
+      )}
+
+      <Divider />
+
+      {/* Custom Introduction */}
+      <Stack spacing={1}>
+        <Typography variant="subtitle2">Innledning (valgfritt)</Typography>
+        <TextField
+          multiline
+          rows={4}
+          placeholder={
+            template === 'miljøarbeider' ?
+            "Skriv en innledning til rapporten...\n\nEksempel: I løpet av denne perioden har jeg jobbet med flere brukere gjennom ulike aktiviteter. Fokuset har vært på sosial utvikling og hverdagsmestring.\n\nHusk: Unngå navn og identifiserbar informasjon." :
+            "Skriv en innledning til rapporten... \n\nEksempel: Dette er en oppsummering av mine aktiviteter i løpet av måneden. Jeg har fokusert på..."
+          }
+          value={customIntro}
+          onChange={(e) => setCustomIntro(e.target.value)}
+          fullWidth
+          inputProps={{
+            spellCheck: true,
+            lang: 'nb-NO',
+          }}
+        />
+        <Typography variant="caption" color="text.secondary">
+          Innledningen vises øverst i rapporten, før prosjektinformasjonen.
+          {template === 'miljøarbeider' && ' Husk å anonymisere all informasjon.'}
+        </Typography>
+      </Stack>
+
+      {/* Preview Info */}
+      <Stack spacing={1} sx={{ p: 2, bgcolor: 'action.hover', borderRadius: 1 }}>
+        <Typography variant="subtitle2">Rapporten vil inneholde:</Typography>
+        <Typography variant="body2" component="div">
+          • Tittel og måned ({month.slice(0,4)}-{month.slice(4,6)})<br/>
+          {customIntro && '• Din egendefinerte innledning\n'}
+          • Prosjektinformasjon<br/>
+          • Sammendrag (timer, dager, aktiviteter)<br/>
+          • Detaljert logg med alle registreringer<br/>
+          {customNotes && '• Dine tilleggsnotater'}
+        </Typography>
+      </Stack>
+
+      {/* Custom Notes */}
+      <Stack spacing={1}>
+        <Typography variant="subtitle2">Tilleggsnotater (valgfritt)</Typography>
+        <TextField
+          multiline
+          rows={4}
+          placeholder={
+            template === 'miljøarbeider' ?
+            "Legg til notater på slutten av rapporten...\n\nEksempel: Generelle observasjoner om fremgang, utfordringer i arbeidet, behov for oppfølging, samarbeidspartnere involvert, etc.\n\nHusk: Ikke inkluder personidentifiserbar informasjon." :
+            "Legg til notater på slutten av rapporten...\n\nEksempel: Refleksjoner, utfordringer, planlagte tiltak for neste måned, etc."
+          }
+          value={customNotes}
+          onChange={(e) => setCustomNotes(e.target.value)}
+          fullWidth
+          inputProps={{
+            spellCheck: true,
+            lang: 'nb-NO',
+          }}
+        />
+        <Typography variant="caption" color="text.secondary">
+          Notater vises nederst i rapporten, etter den detaljerte loggen.
+          {template === 'miljøarbeider' && ' Fokuser på generelle mønstre og utvikling, ikke individuelle detaljer.'}
+        </Typography>
+      </Stack>
+
+      {/* Generate Button */}
+      <Stack direction="row" spacing={2}>
+        <Button 
+          variant="contained" 
+          onClick={handleGenerateReport} 
+          disabled={busy || (detectedNames.length > 0 && (template === 'miljøarbeider' || template === 'auto'))}
+          startIcon={busy ? <CircularProgress size={16} /> : null}
+          fullWidth
+          color={detectedNames.length > 0 && (template === 'miljøarbeider' || template === 'auto') ? 'error' : 'primary'}
+        >
+          {busy ? 'Genererer...' : detectedNames.length > 0 && (template === 'miljøarbeider' || template === 'auto') ? 'Fjern navn før generering' : 'Generer Google Docs rapport'}
+        </Button>
+      </Stack>
+      
+      {detectedNames.length > 0 && (template === 'miljøarbeider' || template === 'auto') && (
+        <Typography variant="caption" color="error" sx={{ textAlign: 'center', fontWeight: 'bold' }}>
+          ⚠️ Kan ikke generere rapport med personidentifiserbar informasjon
+        </Typography>
+      )}
+
+      <Typography variant="caption" color="text.secondary" sx={{ textAlign: 'center' }}>
+        Rapporten opprettes som et nytt Google Docs-dokument som du kan redigere videre.
+      </Typography>
+      
+      {/* Preview Dialog */}
+      <Dialog open={showPreview} onClose={() => setShowPreview(false)} maxWidth="md" fullWidth>
+        <DialogTitle>
+          <Stack direction="row" spacing={2} alignItems="center">
+            <Typography variant="h6">🔍 Forhåndsvisning av endringer</Typography>
+          </Stack>
+        </DialogTitle>
+        <DialogContent>
+          <Stack spacing={3}>
+            <Typography variant="body2">
+              Følgende navn vil bli erstattet med generelle betegnelser:
+            </Typography>
+            
+            {/* Replacements list */}
+            <Stack spacing={1}>
+              {previewChanges.replacements.map((replacement, idx) => (
+                <Stack key={idx} direction="row" spacing={2} alignItems="center" sx={{ p: 1, bgcolor: 'action.hover', borderRadius: 1 }}>
+                  <Chip label={replacement.from} color="error" size="small" sx={{ textDecoration: 'line-through' }} />
+                  <Typography>→</Typography>
+                  <Chip label={replacement.to} color="success" size="small" sx={{ fontWeight: 'bold' }} />
+                </Stack>
+              ))}
+            </Stack>
+            
+            {/* Text preview with highlighting */}
+            <Stack spacing={2}>
+              <Typography variant="subtitle2">Tekst med endringer markert:</Typography>
+              <Box sx={{ p: 2, bgcolor: 'background.paper', borderRadius: 1, border: '1px solid', borderColor: 'divider', maxHeight: 300, overflow: 'auto' }}>
+                <Typography variant="body2" component="div" sx={{ whiteSpace: 'pre-wrap' }}>
+                  {previewChanges.corrected.split(new RegExp(`(${previewChanges.replacements.map(r => r.to).join('|')})`, 'g')).map((part, idx) => {
+                    const isReplacement = previewChanges.replacements.some(r => r.to === part);
+                    return isReplacement ? (
+                      <span key={idx} style={{ backgroundColor: '#4caf50', color: 'white', padding: '2px 4px', borderRadius: '3px', fontWeight: 'bold' }}>
+                        {part}
+                      </span>
+                    ) : (
+                      <span key={idx}>{part}</span>
+                    );
+                  })}
+                </Typography>
+              </Box>
+            </Stack>
+            
+            {/* Action buttons */}
+            <Stack direction="row" spacing={2} justifyContent="flex-end">
+              <Button onClick={() => setShowPreview(false)} variant="outlined">
+                Avbryt
+              </Button>
+              <Button onClick={applyCorrections} variant="contained" color="success">
+                ✅ Godta endringer
+              </Button>
+            </Stack>
+          </Stack>
+        </DialogContent>
+      </Dialog>
+    </Stack>
+  );
+}
+
 function SendTimesheet({ month, onToast, settings, updateSettings }: { month: string; onToast: (msg: string, sev?: any) => void; settings: any; updateSettings: any }) {
   const [busy, setBusy] = useState(false);
+  const [googleConnected, setGoogleConnected] = useState(false);
+  const [checkingAuth, setCheckingAuth] = useState(true);
+  const [useGmail, setUseGmail] = useState(false);
   const sender = settings?.timesheet_sender || '';
   const recipient = settings?.timesheet_recipient || '';
   const format = settings?.timesheet_format || 'xlsx';
   const smtpPass = settings?.smtp_app_password || '';
 
-  async function handleSend() {
+  // Check Google auth status on mount
+  useEffect(() => {
+    (async () => {
+      try {
+        const status = await getGoogleAuthStatus();
+        setGoogleConnected(status.isConnected && !status.needsReauth);
+        if (status.isConnected && !status.needsReauth) {
+          setUseGmail(true); // Default to Gmail if connected
+        }
+      } catch (e) {
+        console.error('Failed to check Google auth:', e);
+      } finally {
+        setCheckingAuth(false);
+      }
+    })();
+  }, []);
+
+  async function handleSendGmail() {
     setBusy(true);
     try {
-      await sendTimesheet({ month, senderEmail: sender, recipientEmail: recipient, format });
-      onToast('Timeliste sendt', 'success');
+      await sendTimesheetViaGmail({ month, recipientEmail: recipient, format });
+      onToast('Timeliste sendt via Gmail', 'success');
     } catch (e:any) {
       onToast(`Kunne ikke sende: ${e?.message || e}`, 'error');
     } finally { setBusy(false); }
   }
 
+  async function handleSendSMTP() {
+    setBusy(true);
+    try {
+      await sendTimesheet({ month, senderEmail: sender, recipientEmail: recipient, format });
+      onToast('Timeliste sendt via SMTP', 'success');
+    } catch (e:any) {
+      onToast(`Kunne ikke sende: ${e?.message || e}`, 'error');
+    } finally { setBusy(false); }
+  }
+
+  if (checkingAuth) {
+    return <CircularProgress size={24} />;
+  }
+
   return (
     <Stack spacing={2}>
-      <Stack direction={{ xs: 'column', md: 'row' }} spacing={2}>
-        <TextField label="Avsender e-post" value={sender} onChange={(e)=>updateSettings({timesheet_sender: e.target.value})} fullWidth />
-        <TextField label="Mottaker e-post" value={recipient} onChange={(e)=>updateSettings({timesheet_recipient: e.target.value})} fullWidth />
-        <FormControl>
-          <InputLabel>Format</InputLabel>
-          <Select label="Format" value={format} onChange={(e)=>updateSettings({timesheet_format: e.target.value})}>
-            <MenuItem value="xlsx">XLSX</MenuItem>
-            <MenuItem value="pdf">PDF</MenuItem>
-          </Select>
-        </FormControl>
-      </Stack>
-      <TextField type="password" label="App-passord (SMTP)" value={smtpPass} onChange={(e)=>updateSettings({smtp_app_password: e.target.value})} fullWidth />
-      <Button variant="contained" onClick={handleSend} disabled={busy || !sender || !recipient}>Send</Button>
-      <Typography variant="caption" color="text.secondary">Vi gjetter SMTP basert på e-post (Gmail/Outlook/Yahoo/iCloud/Proton m.fl.). Bruk app-passord for Gmail/Outlook.</Typography>
+      {googleConnected && (
+        <Stack direction="row" spacing={2} alignItems="center">
+          <Chip label="Google-konto tilkoblet" color="success" size="small" />
+          <FormControl size="small">
+            <InputLabel>Sendemetode</InputLabel>
+            <Select label="Sendemetode" value={useGmail ? 'gmail' : 'smtp'} onChange={(e)=>setUseGmail(e.target.value === 'gmail')}>
+              <MenuItem value="gmail">Gmail (anbefalt)</MenuItem>
+              <MenuItem value="smtp">SMTP</MenuItem>
+            </Select>
+          </FormControl>
+        </Stack>
+      )}
+      
+      {useGmail && googleConnected ? (
+        <>
+          <Stack direction={{ xs: 'column', md: 'row' }} spacing={2}>
+            <TextField label="Mottaker e-post" value={recipient} onChange={(e)=>updateSettings({timesheet_recipient: e.target.value})} fullWidth />
+            <FormControl>
+              <InputLabel>Format</InputLabel>
+              <Select label="Format" value={format} onChange={(e)=>updateSettings({timesheet_format: e.target.value})}>
+                <MenuItem value="xlsx">XLSX</MenuItem>
+                <MenuItem value="pdf">PDF</MenuItem>
+              </Select>
+            </FormControl>
+          </Stack>
+          <Button variant="contained" onClick={handleSendGmail} disabled={busy || !recipient}>Send via Gmail</Button>
+          <Typography variant="caption" color="text.secondary">E-posten sendes fra din tilkoblede Google-konto.</Typography>
+        </>
+      ) : (
+        <>
+          <Stack direction={{ xs: 'column', md: 'row' }} spacing={2}>
+            <TextField label="Avsender e-post" value={sender} onChange={(e)=>updateSettings({timesheet_sender: e.target.value})} fullWidth />
+            <TextField label="Mottaker e-post" value={recipient} onChange={(e)=>updateSettings({timesheet_recipient: e.target.value})} fullWidth />
+            <FormControl>
+              <InputLabel>Format</InputLabel>
+              <Select label="Format" value={format} onChange={(e)=>updateSettings({timesheet_format: e.target.value})}>
+                <MenuItem value="xlsx">XLSX</MenuItem>
+                <MenuItem value="pdf">PDF</MenuItem>
+              </Select>
+            </FormControl>
+          </Stack>
+          <TextField type="password" label="App-passord (SMTP)" value={smtpPass} onChange={(e)=>updateSettings({smtp_app_password: e.target.value})} fullWidth />
+          <Button variant="contained" onClick={handleSendSMTP} disabled={busy || !sender || !recipient}>Send via SMTP</Button>
+          <Typography variant="caption" color="text.secondary">
+            {googleConnected ? 'SMTP-modus: ' : 'Koble til Google-kontoen din for enklere sending, eller '}
+            Vi gjetter SMTP basert på e-post (Gmail/Outlook/Yahoo/iCloud/Proton m.fl.). Bruk app-passord for Gmail/Outlook.
+          </Typography>
+        </>
+      )}
     </Stack>
   );
 }
@@ -1306,12 +1845,20 @@ export default function Home() {
             </CardContent>
           </Card>
         </Grid>
+        <Grid item xs={12}>
+          <Card>
+            <CardHeader title="Skriv en rapport for måneden" />
+            <CardContent>
+              <ReportGenerator month={monthNav} onToast={showToast} />
+            </CardContent>
+          </Card>
+        </Grid>
       </Grid>
 
       <Box mt={3} ref={logsRef}>
         <Card>
           <CardHeader 
-            title={`Logg for ${monthNav}`}
+            title={`Logg for ${formatMonthLabel(monthNav)}`}
             action={
               <Stack direction="row" spacing={1}>
                 {bulkMode && selectedIds.size > 0 && (

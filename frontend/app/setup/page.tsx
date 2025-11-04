@@ -1,7 +1,12 @@
 "use client";
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
-import { Box, Button, Card, CardContent, CardHeader, Container, Stack, TextField, Typography, CircularProgress, Autocomplete, Fade } from "@mui/material";
+import { Box, Button, Card, CardContent, CardHeader, Container, Stack, TextField, Typography, CircularProgress, Autocomplete, Fade, MenuItem, ListItemIcon, ListItemText } from "@mui/material";
+import GroupIcon from '@mui/icons-material/Group';
+import PsychologyIcon from '@mui/icons-material/Psychology';
+import SportsIcon from '@mui/icons-material/Sports';
+import NatureIcon from '@mui/icons-material/Nature';
+import ManageAccountsIcon from '@mui/icons-material/ManageAccounts';
 import Image from "next/image";
 import { useProjectInfo } from "../../lib/hooks";
 import { searchBrregCompany, KINOA_TILTAK_AS, type BrregCompany } from "../../lib/brreg";
@@ -209,12 +214,40 @@ export default function Setup() {
               required
               aria-label="Oppdragsgiver navn"
             />
-            <TextField 
-              label="Tiltak" 
-              value={form.tiltak} 
-              onChange={(e)=>setForm({ ...form, tiltak: e.target.value })} 
-              fullWidth
-              aria-label="Tiltak beskrivelse"
+            <Autocomplete
+              freeSolo
+              options={[
+                { label: 'Miljøarbeider', icon: <GroupIcon /> },
+                { label: 'Sosialarbeider', icon: <PsychologyIcon /> },
+                { label: 'Aktivitør', icon: <SportsIcon /> },
+                { label: 'Miljøterapeut', icon: <NatureIcon /> },
+                { label: 'Tiltaksleder', icon: <ManageAccountsIcon /> },
+              ]}
+              value={form.tiltak}
+              onChange={(_, newValue) => {
+                if (typeof newValue === 'object' && newValue) {
+                  setForm({ ...form, tiltak: newValue.label });
+                } else {
+                  setForm({ ...form, tiltak: newValue || '' });
+                }
+              }}
+              onInputChange={(_, newValue) => setForm({ ...form, tiltak: newValue })}
+              getOptionLabel={(option) => typeof option === 'string' ? option : option.label}
+              renderOption={(props, option) => (
+                <Box component="li" {...props} key={option.label} sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                  {option.icon}
+                  <Typography>{option.label}</Typography>
+                </Box>
+              )}
+              renderInput={(params) => (
+                <TextField
+                  {...params}
+                  label="Tiltak / Rolle"
+                  placeholder="Velg eller skriv din rolle..."
+                  aria-label="Tiltak eller rolle"
+                  helperText="Velg rolle fra listen eller skriv egen. Påvirker rapportmal."
+                />
+              )}
             />
             <TextField 
               label="Periode" 
