@@ -130,6 +130,8 @@ async function initTables(){
     ALTER TABLE log_row ADD COLUMN IF NOT EXISTS is_stamped_in BOOLEAN DEFAULT false;
     ALTER TABLE log_row ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT NOW();
     ALTER TABLE log_row ADD COLUMN IF NOT EXISTS expense_coverage NUMERIC(10,2) DEFAULT 0;
+    ALTER TABLE log_row ADD COLUMN IF NOT EXISTS is_archived BOOLEAN DEFAULT false;
+    ALTER TABLE log_row ADD COLUMN IF NOT EXISTS archived_at TIMESTAMP;
     ALTER TABLE user_settings ADD COLUMN IF NOT EXISTS invoice_reminder_active BOOLEAN DEFAULT false;
     ALTER TABLE user_settings ADD COLUMN IF NOT EXISTS theme_mode TEXT DEFAULT 'dark';
     ALTER TABLE user_settings ADD COLUMN IF NOT EXISTS view_mode TEXT DEFAULT 'month';
@@ -143,6 +145,7 @@ async function initTables(){
     CREATE INDEX IF NOT EXISTS idx_log_row_date ON log_row (date DESC, start_time DESC);
     CREATE INDEX IF NOT EXISTS idx_log_row_user ON log_row(user_id, date DESC);
     CREATE INDEX IF NOT EXISTS idx_log_row_stamped ON log_row(user_id, is_stamped_in) WHERE is_stamped_in = true;
+    CREATE INDEX IF NOT EXISTS idx_log_row_archived ON log_row(user_id, is_archived) WHERE is_archived = false;
     CREATE INDEX IF NOT EXISTS idx_user_settings_user_id ON user_settings(user_id);
     CREATE INDEX IF NOT EXISTS idx_project_info_user_active ON project_info(user_id, is_active);
     CREATE INDEX IF NOT EXISTS idx_quick_templates_user ON quick_templates(user_id, display_order);
@@ -153,20 +156,23 @@ async function initTables(){
 }
 app.get("/",(_,r)=>r.send("✅ Smart Stempling backend is running"));
 app.get("/api/logs", async (req, res) => {
-  const { month } = req.query;
+  const { month, archived } = req.query;
+  const showArchived = archived === 'true';
+  const archiveFilter = showArchived ? "is_archived = true" : "(is_archived = false OR is_archived IS NULL)";
+  
   if (month) {
     const rows = (
       await pool.query(
-        "SELECT * FROM log_row WHERE to_char(date,'YYYYMM')=$1 ORDER BY date DESC, start_time DESC",
+        `SELECT * FROM log_row WHERE to_char(date,'YYYYMM')=$1 AND ${archiveFilter} ORDER BY date DESC, start_time DESC`,
         [String(month)]
       )
     ).rows;
     return res.json(rows);
   }
-  // Default: current month only
+  // Default: current month only, not archived
   const rows = (
     await pool.query(
-      "SELECT * FROM log_row WHERE date >= date_trunc('month', now()) ORDER BY date DESC, start_time DESC"
+      `SELECT * FROM log_row WHERE date >= date_trunc('month', now()) AND ${archiveFilter} ORDER BY date DESC, start_time DESC`
     )
   ).rows;
   res.json(rows);
@@ -516,6 +522,37 @@ app.get("/api/proxy/fetch-csv", async (req, res) => {
 app.delete("/api/logs/:id", async (req, res) => {
   await pool.query("DELETE FROM log_row WHERE id=$1", [req.params.id]);
   res.json({ success: true });
+});
+
+// Archive a log (soft delete)
+app.patch("/api/logs/:id/archive", async (req, res) => {
+  const result = await pool.query(
+    "UPDATE log_row SET is_archived = true, archived_at = NOW(), updated_at = NOW() WHERE id = $1 RETURNING *",
+    [req.params.id]
+  );
+  if (result.rows.length === 0) return res.status(404).json({ error: "Log not found" });
+  res.json(result.rows[0]);
+});
+
+// Unarchive a log
+app.patch("/api/logs/:id/unarchive", async (req, res) => {
+  const result = await pool.query(
+    "UPDATE log_row SET is_archived = false, archived_at = NULL, updated_at = NOW() WHERE id = $1 RETURNING *",
+    [req.params.id]
+  );
+  if (result.rows.length === 0) return res.status(404).json({ error: "Log not found" });
+  res.json(result.rows[0]);
+});
+
+// Bulk archive logs by month
+app.post("/api/logs/archive-month", async (req, res) => {
+  const { month } = req.body;
+  if (!month) return res.status(400).json({ error: "Month required (YYYYMM)" });
+  const result = await pool.query(
+    "UPDATE log_row SET is_archived = true, archived_at = NOW(), updated_at = NOW() WHERE to_char(date,'YYYYMM') = $1 AND (is_archived = false OR is_archived IS NULL) RETURNING id",
+    [String(month)]
+  );
+  res.json({ archived: result.rowCount, month });
 });
 
 // Delete logs by month (YYYYMM) or all
@@ -1285,7 +1322,9 @@ app.post("/api/reports/generate", async (req, res) => {
         },
       }
     );
-      // Statistics - role-specific
+    
+    // Statistics - role-specific
+    requests.push(
       {
         insertText: {
           location: { index: 1 },
@@ -1303,7 +1342,7 @@ app.post("/api/reports/generate", async (req, res) => {
           location: { index: 1 },
           text: `Arbeidsdager: ${workDays}\n`,
         },
-      },
+      }
     );
     
     // Add role-specific statistics
