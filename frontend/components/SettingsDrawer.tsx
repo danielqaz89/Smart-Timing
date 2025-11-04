@@ -23,6 +23,9 @@ import {
 } from "@mui/material";
 import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
 import SettingsIcon from "@mui/icons-material/Settings";
+import AdminPanelSettingsIcon from "@mui/icons-material/AdminPanelSettings";
+import PrivacyTipIcon from "@mui/icons-material/PrivacyTip";
+import Link from "next/link";
 import { useUserSettings } from "../lib/hooks";
 import { useSnackbar } from "notistack";
 import GoogleSheetsPicker from "./GoogleSheetsPicker";
@@ -292,6 +295,45 @@ export default function SettingsDrawer() {
                     </Stack>
                     <Typography variant="caption" color="text.secondary">
                       Webhook sender data til eksterne systemer. Sheets-URL for toveis synk.
+                    </Typography>
+                  </Stack>
+                </AccordionDetails>
+              </Accordion>
+
+              {/* Admin & System */}
+              <Accordion>
+                <AccordionSummary expandIcon={<ExpandMoreIcon />}>
+                  <Typography variant="h6">🔐 Admin og System</Typography>
+                </AccordionSummary>
+                <AccordionDetails>
+                  <Stack spacing={2}>
+                    <Link href="/admin" passHref style={{ textDecoration: 'none' }}>
+                      <Button
+                        variant="outlined"
+                        startIcon={<AdminPanelSettingsIcon />}
+                        fullWidth
+                      >
+                        Admin Panel
+                      </Button>
+                    </Link>
+                    <Typography variant="caption" color="text.secondary">
+                      Tilgang til systemadministrasjon, brukeradministrasjon og analytics.
+                    </Typography>
+                    
+                    <Divider sx={{ my: 1 }} />
+                    
+                    <Link href="/gdpr" passHref style={{ textDecoration: 'none' }}>
+                      <Button
+                        variant="outlined"
+                        startIcon={<PrivacyTipIcon />}
+                        fullWidth
+                        color="inherit"
+                      >
+                        GDPR og Personvern
+                      </Button>
+                    </Link>
+                    <Typography variant="caption" color="text.secondary">
+                      Eksporter dine data eller slett kontoen din (GDPR-rettigheter).
                     </Typography>
                   </Stack>
                 </AccordionDetails>
