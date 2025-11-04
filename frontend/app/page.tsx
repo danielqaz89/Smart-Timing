@@ -796,6 +796,7 @@ export default function Home() {
   // Setup gate: redirect to /setup if no project info in database
   const router = useRouter();
   const [hasCheckedSetup, setHasCheckedSetup] = useState(false);
+  const [hasInitializedMonth, setHasInitializedMonth] = useState(false);
   
   useEffect(() => {
     // Only check once when loading is complete
@@ -806,6 +807,64 @@ export default function Home() {
       }
     }
   }, [projectInfo, projectLoading, router, hasCheckedSetup]);
+
+  // Initialize month_nav from project periode if not set
+  useEffect(() => {
+    if (projectInfo && !settingsLoading && !hasInitializedMonth && (!monthNav || monthNav === dayjs().format("YYYYMM"))) {
+      const periode = projectInfo.periode;
+      if (periode) {
+        // Try to parse periode like "Desember 2024", "Q1 2025", "Januar 2025", etc.
+        const parsed = parsePeriodeToYYYYMM(periode);
+        if (parsed && parsed !== monthNav) {
+          updateSettings({ month_nav: parsed });
+        }
+      }
+      setHasInitializedMonth(true);
+    }
+  }, [projectInfo, monthNav, settingsLoading, hasInitializedMonth, updateSettings]);
+
+  // Helper to parse periode text to YYYYMM format
+  function parsePeriodeToYYYYMM(periode: string): string | null {
+    const lower = periode.toLowerCase().trim();
+    
+    // Norwegian month names
+    const months: Record<string, string> = {
+      'januar': '01', 'jan': '01',
+      'februar': '02', 'feb': '02',
+      'mars': '03', 'mar': '03',
+      'april': '04', 'apr': '04',
+      'mai': '05', 'may': '05',
+      'juni': '06', 'jun': '06',
+      'juli': '07', 'jul': '07',
+      'august': '08', 'aug': '08',
+      'september': '09', 'sep': '09',
+      'oktober': '10', 'okt': '10', 'oct': '10',
+      'november': '11', 'nov': '11',
+      'desember': '12', 'des': '12', 'dec': '12',
+    };
+    
+    // Extract year (4 digits)
+    const yearMatch = lower.match(/\b(20\d{2})\b/);
+    const year = yearMatch ? yearMatch[1] : dayjs().format('YYYY');
+    
+    // Try to find month name
+    for (const [name, num] of Object.entries(months)) {
+      if (lower.includes(name)) {
+        return `${year}${num}`;
+      }
+    }
+    
+    // Check for Q1, Q2, Q3, Q4 format
+    if (lower.match(/q[1-4]/)) {
+      const quarter = lower.match(/q([1-4])/)?.[1];
+      if (quarter) {
+        const monthMap: Record<string, string> = { '1': '01', '2': '04', '3': '07', '4': '10' };
+        return `${year}${monthMap[quarter]}`;
+      }
+    }
+    
+    return null;
+  }
 
   // Mobile navigation handlers
   const handleMobileNavigate = (section: "home" | "logs" | "stats" | "settings") => {
