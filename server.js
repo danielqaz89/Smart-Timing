@@ -8,8 +8,12 @@ import PDFDocument from "pdfkit";
 import nodemailer from "nodemailer";
 import { syncToKinoaSheet, isKinoaCompany, getOAuth2Client } from "./lib/googleSheets.js";
 import { google } from "googleapis";
+import jwt from "jsonwebtoken";
+import bcrypt from "bcrypt";
 dotenv.config();
 const app = express();
+const JWT_SECRET = process.env.JWT_SECRET || 'smart-timing-secret-change-in-production';
+const ADMIN_SESSION_HOURS = 24;
 const allowedOrigins = (process.env.FRONTEND_ORIGINS || "https://smart-timing-git-main-daniel-qazis-projects.vercel.app,http://localhost:3000,http://127.0.0.1:3000")
   .split(",")
   .map((s) => s.trim())
@@ -118,6 +122,41 @@ async function initTables(){
       error_message TEXT,
       created_at TIMESTAMP DEFAULT NOW()
     );
+    
+    -- Admin users table
+    CREATE TABLE IF NOT EXISTS admin_users (
+      id SERIAL PRIMARY KEY,
+      username TEXT UNIQUE NOT NULL,
+      email TEXT UNIQUE NOT NULL,
+      password_hash TEXT NOT NULL,
+      role TEXT CHECK (role IN ('super_admin', 'admin', 'moderator')) DEFAULT 'admin',
+      is_active BOOLEAN DEFAULT true,
+      last_login TIMESTAMP,
+      created_at TIMESTAMP DEFAULT NOW(),
+      updated_at TIMESTAMP DEFAULT NOW()
+    );
+    
+    -- Admin audit log table
+    CREATE TABLE IF NOT EXISTS admin_audit_log (
+      id SERIAL PRIMARY KEY,
+      admin_id INT REFERENCES admin_users(id) ON DELETE SET NULL,
+      action TEXT NOT NULL,
+      target_type TEXT,
+      target_id TEXT,
+      details JSONB,
+      ip_address TEXT,
+      created_at TIMESTAMP DEFAULT NOW()
+    );
+    
+    -- System settings table (for CMS control)
+    CREATE TABLE IF NOT EXISTS system_settings (
+      id SERIAL PRIMARY KEY,
+      setting_key TEXT UNIQUE NOT NULL,
+      setting_value JSONB,
+      description TEXT,
+      updated_by INT REFERENCES admin_users(id),
+      updated_at TIMESTAMP DEFAULT NOW()
+    );
   `);
   
   // Alter existing tables (safe, only adds if not exists) - run separately
@@ -151,9 +190,70 @@ async function initTables(){
     CREATE INDEX IF NOT EXISTS idx_quick_templates_user ON quick_templates(user_id, display_order);
     CREATE INDEX IF NOT EXISTS idx_sync_log_user_time ON sync_log(user_id, created_at DESC);
     CREATE INDEX IF NOT EXISTS idx_user_settings_google_auth ON user_settings(user_id, google_token_expiry);
+    CREATE INDEX IF NOT EXISTS idx_admin_users_email ON admin_users(email);
+    CREATE INDEX IF NOT EXISTS idx_admin_users_active ON admin_users(is_active);
+    CREATE INDEX IF NOT EXISTS idx_admin_audit_log_admin ON admin_audit_log(admin_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_admin_audit_log_action ON admin_audit_log(action, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_system_settings_key ON system_settings(setting_key);
   `);
   console.log("✅ Tables initialized with persistence schema");
+  
+  // Create default super admin if none exists
+  const adminCheck = await pool.query('SELECT COUNT(*) FROM admin_users WHERE role = $1', ['super_admin']);
+  if (parseInt(adminCheck.rows[0].count) === 0) {
+    const defaultAdminPassword = process.env.DEFAULT_ADMIN_PASSWORD || 'Admin@123';
+    const passwordHash = await bcrypt.hash(defaultAdminPassword, 10);
+    await pool.query(
+      'INSERT INTO admin_users (username, email, password_hash, role) VALUES ($1, $2, $3, $4)',
+      ['admin', 'admin@smarttiming.com', passwordHash, 'super_admin']
+    );
+    console.log('✅ Default super admin created (username: admin, email: admin@smarttiming.com)');
+  }
 }
+
+// ===== ADMIN MIDDLEWARE =====
+// Verify JWT token and extract admin user
+function authenticateAdmin(req, res, next) {
+  const authHeader = req.headers.authorization;
+  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    return res.status(401).json({ error: 'No token provided' });
+  }
+  
+  const token = authHeader.substring(7);
+  try {
+    const decoded = jwt.verify(token, JWT_SECRET);
+    req.adminUser = decoded;
+    next();
+  } catch (e) {
+    return res.status(401).json({ error: 'Invalid or expired token' });
+  }
+}
+
+// Check if admin has required role
+function requireAdminRole(...allowedRoles) {
+  return (req, res, next) => {
+    if (!req.adminUser) {
+      return res.status(401).json({ error: 'Not authenticated' });
+    }
+    if (!allowedRoles.includes(req.adminUser.role)) {
+      return res.status(403).json({ error: 'Insufficient permissions' });
+    }
+    next();
+  };
+}
+
+// Log admin action to audit trail
+async function logAdminAction(adminId, action, targetType, targetId, details, ipAddress) {
+  try {
+    await pool.query(
+      'INSERT INTO admin_audit_log (admin_id, action, target_type, target_id, details, ip_address) VALUES ($1, $2, $3, $4, $5, $6)',
+      [adminId, action, targetType, targetId, JSON.stringify(details), ipAddress]
+    );
+  } catch (e) {
+    console.error('Failed to log admin action:', e);
+  }
+}
+
 app.get("/",(_,r)=>r.send("✅ Smart Stempling backend is running"));
 app.get("/api/logs", async (req, res) => {
   const { month, archived } = req.query;
@@ -1475,6 +1575,375 @@ app.post("/api/reports/generate", async (req, res) => {
       error: 'Failed to generate report',
       details: String(e),
     });
+  }
+});
+
+// ===== ADMIN AUTHENTICATION ENDPOINTS =====
+// POST /api/admin/login - Admin login
+app.post("/api/admin/login", async (req, res) => {
+  try {
+    const { username, password } = req.body;
+    if (!username || !password) {
+      return res.status(400).json({ error: 'Username and password required' });
+    }
+    
+    const result = await pool.query(
+      'SELECT * FROM admin_users WHERE (username = $1 OR email = $1) AND is_active = true',
+      [username]
+    );
+    
+    if (result.rows.length === 0) {
+      return res.status(401).json({ error: 'Invalid credentials' });
+    }
+    
+    const admin = result.rows[0];
+    const validPassword = await bcrypt.compare(password, admin.password_hash);
+    
+    if (!validPassword) {
+      return res.status(401).json({ error: 'Invalid credentials' });
+    }
+    
+    // Update last login
+    await pool.query('UPDATE admin_users SET last_login = NOW() WHERE id = $1', [admin.id]);
+    
+    // Generate JWT token
+    const token = jwt.sign(
+      { id: admin.id, username: admin.username, email: admin.email, role: admin.role },
+      JWT_SECRET,
+      { expiresIn: `${ADMIN_SESSION_HOURS}h` }
+    );
+    
+    await logAdminAction(admin.id, 'admin_login', 'session', null, { username }, req.ip);
+    
+    res.json({
+      success: true,
+      token,
+      admin: {
+        id: admin.id,
+        username: admin.username,
+        email: admin.email,
+        role: admin.role,
+        last_login: admin.last_login,
+      },
+    });
+  } catch (e) {
+    console.error('Admin login error:', e);
+    res.status(500).json({ error: 'Login failed', details: String(e) });
+  }
+});
+
+// POST /api/admin/register - Create new admin (super_admin only)
+app.post("/api/admin/register", authenticateAdmin, requireAdminRole('super_admin'), async (req, res) => {
+  try {
+    const { username, email, password, role = 'admin' } = req.body;
+    
+    if (!username || !email || !password) {
+      return res.status(400).json({ error: 'Username, email, and password required' });
+    }
+    
+    if (!['admin', 'moderator', 'super_admin'].includes(role)) {
+      return res.status(400).json({ error: 'Invalid role' });
+    }
+    
+    // Check if username or email already exists
+    const existing = await pool.query(
+      'SELECT id FROM admin_users WHERE username = $1 OR email = $2',
+      [username, email]
+    );
+    
+    if (existing.rows.length > 0) {
+      return res.status(400).json({ error: 'Username or email already exists' });
+    }
+    
+    const passwordHash = await bcrypt.hash(password, 10);
+    const result = await pool.query(
+      'INSERT INTO admin_users (username, email, password_hash, role) VALUES ($1, $2, $3, $4) RETURNING id, username, email, role, created_at',
+      [username, email, passwordHash, role]
+    );
+    
+    await logAdminAction(
+      req.adminUser.id,
+      'admin_created',
+      'admin_user',
+      result.rows[0].id,
+      { username, email, role },
+      req.ip
+    );
+    
+    res.json({ success: true, admin: result.rows[0] });
+  } catch (e) {
+    console.error('Admin registration error:', e);
+    res.status(500).json({ error: 'Registration failed', details: String(e) });
+  }
+});
+
+// GET /api/admin/profile - Get current admin profile
+app.get("/api/admin/profile", authenticateAdmin, async (req, res) => {
+  try {
+    const result = await pool.query(
+      'SELECT id, username, email, role, is_active, last_login, created_at FROM admin_users WHERE id = $1',
+      [req.adminUser.id]
+    );
+    
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Admin not found' });
+    }
+    
+    res.json(result.rows[0]);
+  } catch (e) {
+    console.error('Admin profile fetch error:', e);
+    res.status(500).json({ error: 'Failed to fetch profile', details: String(e) });
+  }
+});
+
+// ===== ADMIN USER MANAGEMENT ENDPOINTS =====
+// GET /api/admin/users - List all users with stats
+app.get("/api/admin/users", authenticateAdmin, requireAdminRole('super_admin', 'admin', 'moderator'), async (req, res) => {
+  try {
+    const { search, limit = 50, offset = 0 } = req.query;
+    
+    let query = `
+      SELECT 
+        us.user_id,
+        us.created_at as user_since,
+        us.hourly_rate,
+        us.theme_mode,
+        COUNT(DISTINCT lr.id) as total_logs,
+        COUNT(DISTINCT pi.id) as total_projects,
+        MAX(lr.date) as last_activity_date
+      FROM user_settings us
+      LEFT JOIN log_row lr ON lr.user_id = us.user_id
+      LEFT JOIN project_info pi ON pi.user_id = us.user_id
+    `;
+    
+    const params = [];
+    if (search) {
+      query += ` WHERE us.user_id ILIKE $1`;
+      params.push(`%${search}%`);
+    }
+    
+    query += ` GROUP BY us.user_id, us.created_at, us.hourly_rate, us.theme_mode ORDER BY us.created_at DESC LIMIT $${params.length + 1} OFFSET $${params.length + 2}`;
+    params.push(limit, offset);
+    
+    const result = await pool.query(query, params);
+    
+    // Get total count
+    let countQuery = 'SELECT COUNT(DISTINCT user_id) as total FROM user_settings';
+    if (search) {
+      countQuery += ' WHERE user_id ILIKE $1';
+    }
+    const countResult = await pool.query(countQuery, search ? [`%${search}%`] : []);
+    
+    res.json({
+      users: result.rows,
+      pagination: {
+        total: parseInt(countResult.rows[0].total),
+        limit: parseInt(limit),
+        offset: parseInt(offset),
+      },
+    });
+  } catch (e) {
+    console.error('Admin users list error:', e);
+    res.status(500).json({ error: 'Failed to fetch users', details: String(e) });
+  }
+});
+
+// GET /api/admin/users/:userId - Get detailed user information
+app.get("/api/admin/users/:userId", authenticateAdmin, requireAdminRole('super_admin', 'admin', 'moderator'), async (req, res) => {
+  try {
+    const { userId } = req.params;
+    
+    const [settings, logs, projects, templates, syncLog] = await Promise.all([
+      pool.query('SELECT * FROM user_settings WHERE user_id = $1', [userId]),
+      pool.query('SELECT COUNT(*) as count, MIN(date) as first_log, MAX(date) as last_log FROM log_row WHERE user_id = $1', [userId]),
+      pool.query('SELECT * FROM project_info WHERE user_id = $1 ORDER BY created_at DESC', [userId]),
+      pool.query('SELECT * FROM quick_templates WHERE user_id = $1 ORDER BY display_order', [userId]),
+      pool.query('SELECT * FROM sync_log WHERE user_id = $1 ORDER BY created_at DESC LIMIT 10', [userId]),
+    ]);
+    
+    if (settings.rows.length === 0) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+    
+    res.json({
+      user_id: userId,
+      settings: settings.rows[0],
+      statistics: logs.rows[0],
+      projects: projects.rows,
+      templates: templates.rows,
+      recent_syncs: syncLog.rows,
+    });
+  } catch (e) {
+    console.error('Admin user detail error:', e);
+    res.status(500).json({ error: 'Failed to fetch user details', details: String(e) });
+  }
+});
+
+// DELETE /api/admin/users/:userId - Delete user (super_admin only)
+app.delete("/api/admin/users/:userId", authenticateAdmin, requireAdminRole('super_admin'), async (req, res) => {
+  try {
+    const { userId } = req.params;
+    
+    // Delete all user data
+    const results = await Promise.all([
+      pool.query('DELETE FROM log_row WHERE user_id = $1', [userId]),
+      pool.query('DELETE FROM user_settings WHERE user_id = $1', [userId]),
+      pool.query('DELETE FROM project_info WHERE user_id = $1', [userId]),
+      pool.query('DELETE FROM quick_templates WHERE user_id = $1', [userId]),
+      pool.query('DELETE FROM sync_log WHERE user_id = $1', [userId]),
+    ]);
+    
+    const totalDeleted = results.reduce((sum, r) => sum + r.rowCount, 0);
+    
+    await logAdminAction(
+      req.adminUser.id,
+      'user_deleted',
+      'user',
+      userId,
+      { deleted_records: totalDeleted },
+      req.ip
+    );
+    
+    res.json({ success: true, deleted_records: totalDeleted });
+  } catch (e) {
+    console.error('Admin user deletion error:', e);
+    res.status(500).json({ error: 'Failed to delete user', details: String(e) });
+  }
+});
+
+// ===== ADMIN ANALYTICS ENDPOINTS =====
+// GET /api/admin/analytics - System-wide analytics
+app.get("/api/admin/analytics", authenticateAdmin, requireAdminRole('super_admin', 'admin'), async (req, res) => {
+  try {
+    const [userStats, logStats, projectStats, recentActivity] = await Promise.all([
+      pool.query(`
+        SELECT 
+          COUNT(DISTINCT user_id) as total_users,
+          COUNT(*) as total_settings
+        FROM user_settings
+      `),
+      pool.query(`
+        SELECT 
+          COUNT(*) as total_logs,
+          COUNT(DISTINCT user_id) as active_users,
+          SUM(EXTRACT(EPOCH FROM (end_time - start_time)) / 3600 - COALESCE(break_hours, 0)) as total_hours,
+          COUNT(DISTINCT DATE_TRUNC('month', date)) as active_months
+        FROM log_row
+      `),
+      pool.query(`
+        SELECT 
+          COUNT(*) as total_projects,
+          COUNT(DISTINCT user_id) as users_with_projects,
+          SUM(CASE WHEN is_active THEN 1 ELSE 0 END) as active_projects
+        FROM project_info
+      `),
+      pool.query(`
+        SELECT 
+          user_id,
+          COUNT(*) as log_count,
+          MAX(date) as last_activity
+        FROM log_row
+        WHERE date >= NOW() - INTERVAL '7 days'
+        GROUP BY user_id
+        ORDER BY log_count DESC
+        LIMIT 10
+      `),
+    ]);
+    
+    res.json({
+      users: userStats.rows[0],
+      logs: logStats.rows[0],
+      projects: projectStats.rows[0],
+      recent_active_users: recentActivity.rows,
+      timestamp: new Date().toISOString(),
+    });
+  } catch (e) {
+    console.error('Admin analytics error:', e);
+    res.status(500).json({ error: 'Failed to fetch analytics', details: String(e) });
+  }
+});
+
+// GET /api/admin/audit-log - View audit trail
+app.get("/api/admin/audit-log", authenticateAdmin, requireAdminRole('super_admin', 'admin'), async (req, res) => {
+  try {
+    const { limit = 100, offset = 0, action, admin_id } = req.query;
+    
+    let query = `
+      SELECT 
+        aal.*,
+        au.username as admin_username,
+        au.email as admin_email
+      FROM admin_audit_log aal
+      LEFT JOIN admin_users au ON au.id = aal.admin_id
+      WHERE 1=1
+    `;
+    const params = [];
+    
+    if (action) {
+      params.push(action);
+      query += ` AND aal.action = $${params.length}`;
+    }
+    
+    if (admin_id) {
+      params.push(admin_id);
+      query += ` AND aal.admin_id = $${params.length}`;
+    }
+    
+    query += ` ORDER BY aal.created_at DESC LIMIT $${params.length + 1} OFFSET $${params.length + 2}`;
+    params.push(limit, offset);
+    
+    const result = await pool.query(query, params);
+    
+    res.json({
+      logs: result.rows,
+      pagination: { limit: parseInt(limit), offset: parseInt(offset) },
+    });
+  } catch (e) {
+    console.error('Admin audit log error:', e);
+    res.status(500).json({ error: 'Failed to fetch audit log', details: String(e) });
+  }
+});
+
+// ===== ADMIN SYSTEM SETTINGS ENDPOINTS =====
+// GET /api/admin/settings - Get all system settings
+app.get("/api/admin/settings", authenticateAdmin, requireAdminRole('super_admin', 'admin'), async (req, res) => {
+  try {
+    const result = await pool.query('SELECT * FROM system_settings ORDER BY setting_key');
+    res.json(result.rows);
+  } catch (e) {
+    console.error('Admin settings fetch error:', e);
+    res.status(500).json({ error: 'Failed to fetch settings', details: String(e) });
+  }
+});
+
+// PUT /api/admin/settings/:key - Update system setting
+app.put("/api/admin/settings/:key", authenticateAdmin, requireAdminRole('super_admin'), async (req, res) => {
+  try {
+    const { key } = req.params;
+    const { value, description } = req.body;
+    
+    const result = await pool.query(
+      `INSERT INTO system_settings (setting_key, setting_value, description, updated_by)
+       VALUES ($1, $2, $3, $4)
+       ON CONFLICT (setting_key)
+       DO UPDATE SET setting_value = $2, description = $3, updated_by = $4, updated_at = NOW()
+       RETURNING *`,
+      [key, JSON.stringify(value), description, req.adminUser.id]
+    );
+    
+    await logAdminAction(
+      req.adminUser.id,
+      'setting_updated',
+      'system_setting',
+      key,
+      { value, description },
+      req.ip
+    );
+    
+    res.json(result.rows[0]);
+  } catch (e) {
+    console.error('Admin settings update error:', e);
+    res.status(500).json({ error: 'Failed to update setting', details: String(e) });
   }
 });
 
