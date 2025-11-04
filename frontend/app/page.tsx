@@ -518,7 +518,7 @@ export default function Home() {
   const [rateInput, setRateInput] = useState<string>("");
   useEffect(() => { setRateInput(formatRate(rate)); }, [rate]);
   const paidBreak = settings?.paid_break || false;
-  const taxPct = settings?.tax_pct || 35;
+  const taxPct = Number(settings?.tax_pct) || 35;
   const monthNav = settings?.month_nav || dayjs().format("YYYYMM");
   const [calcBusy, setCalcBusy] = useState(false);
   const getKey = (index: number) => {
