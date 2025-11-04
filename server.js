@@ -10,10 +10,16 @@ import { syncToKinoaSheet, isKinoaCompany, getOAuth2Client } from "./lib/googleS
 import { google } from "googleapis";
 import jwt from "jsonwebtoken";
 import bcrypt from "bcrypt";
+import process from "process";
+
 dotenv.config();
 const app = express();
 const JWT_SECRET = process.env.JWT_SECRET || 'smart-timing-secret-change-in-production';
 const ADMIN_SESSION_HOURS = 24;
+
+// Server health tracking
+let serverStartTime = Date.now();
+let isShuttingDown = false;
 const allowedOrigins = (process.env.FRONTEND_ORIGINS || "https://smart-timing-git-main-daniel-qazis-projects.vercel.app,http://localhost:3000,http://127.0.0.1:3000")
   .split(",")
   .map((s) => s.trim())
@@ -22,6 +28,25 @@ const allowedOriginSuffixes = (process.env.FRONTEND_ORIGIN_SUFFIXES || ".vercel.
   .split(",")
   .map((s) => s.trim())
   .filter(Boolean);
+
+// Request logging middleware
+app.use((req, res, next) => {
+  const start = Date.now();
+  const requestId = `${Date.now()}-${Math.random().toString(36).substring(7)}`;
+  req.requestId = requestId;
+  
+  // Log request
+  console.log(`[${new Date().toISOString()}] ${req.method} ${req.path} [ID: ${requestId}]`);
+  
+  // Log response when finished
+  res.on('finish', () => {
+    const duration = Date.now() - start;
+    const logLevel = res.statusCode >= 400 ? 'ERROR' : 'INFO';
+    console.log(`[${logLevel}] ${req.method} ${req.path} ${res.statusCode} - ${duration}ms [ID: ${requestId}]`);
+  });
+  
+  next();
+});
 
 app.use(
   cors({
@@ -35,8 +60,42 @@ app.use(
     credentials: true,
   })
 );
-app.use(express.json());
-const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+app.use(express.json({ limit: '10mb' })); // Prevent payload too large errors
+
+// Global error handler for JSON parsing errors
+app.use((err, req, res, next) => {
+  if (err instanceof SyntaxError && err.status === 400 && 'body' in err) {
+    console.error('Bad JSON:', err.message);
+    return res.status(400).json({ error: 'Invalid JSON payload' });
+  }
+  next(err);
+});
+
+// Database connection pool with stability settings
+const pool = new Pool({ 
+  connectionString: process.env.DATABASE_URL,
+  max: 20, // Maximum pool size
+  idleTimeoutMillis: 30000, // Close idle clients after 30 seconds
+  connectionTimeoutMillis: 10000, // Timeout if connection takes more than 10 seconds
+  keepAlive: true,
+  keepAliveInitialDelayMillis: 10000,
+});
+
+// Handle pool errors to prevent crashes
+pool.on('error', (err, client) => {
+  console.error('Unexpected database pool error:', err);
+  // Don't exit process, just log the error
+});
+
+// Test database connection on startup
+pool.query('SELECT NOW()', (err, res) => {
+  if (err) {
+    console.error('❌ Database connection failed:', err);
+    process.exit(1);
+  } else {
+    console.log('✅ Database connected at', res.rows[0].now);
+  }
+});
 async function initTables(){
   await pool.query(`
     CREATE EXTENSION IF NOT EXISTS "pgcrypto";
@@ -673,9 +732,38 @@ app.delete("/api/logs", async (req, res) => {
   res.status(400).json({ error: "Provide ?month=YYYYMM or ?all=1" });
 });
 
-// ✅ Add this health-check route
+// ✅ Enhanced health-check route with detailed status
 app.get("/api/test", (req, res) => {
   res.json({ ok: true, message: "Smart Timing backend is working" });
+});
+
+// Advanced health endpoint for monitoring
+app.get("/api/health", async (req, res) => {
+  try {
+    // Check database connectivity
+    const dbCheck = await pool.query('SELECT 1 as status');
+    const uptime = Math.floor((Date.now() - serverStartTime) / 1000);
+    
+    res.json({
+      status: 'healthy',
+      timestamp: new Date().toISOString(),
+      uptime_seconds: uptime,
+      database: dbCheck.rows[0].status === 1 ? 'connected' : 'error',
+      memory: {
+        used: Math.round(process.memoryUsage().heapUsed / 1024 / 1024),
+        total: Math.round(process.memoryUsage().heapTotal / 1024 / 1024),
+        unit: 'MB',
+      },
+      port: PORT,
+      node_version: process.version,
+    });
+  } catch (e) {
+    res.status(503).json({
+      status: 'unhealthy',
+      error: String(e),
+      timestamp: new Date().toISOString(),
+    });
+  }
 });
 
 // ===== USER SETTINGS ENDPOINTS =====
@@ -2041,7 +2129,97 @@ app.delete("/api/gdpr/delete-account", async (req, res) => {
   }
 });
 
+// Global error handler (must be after all routes)
+app.use((err, req, res, next) => {
+  console.error(`[ERROR] Unhandled error in ${req.method} ${req.path}:`, err);
+  
+  // Don't leak error details in production
+  const isProduction = process.env.NODE_ENV === 'production';
+  
+  res.status(err.status || 500).json({
+    error: isProduction ? 'Internal server error' : err.message,
+    requestId: req.requestId,
+    path: req.path,
+    timestamp: new Date().toISOString(),
+    ...(isProduction ? {} : { stack: err.stack }),
+  });
+});
+
 const PORT = process.env.PORT || 4000;
-initTables().then(() =>
-  app.listen(PORT, () => console.log(`🚀 Backend running on http://localhost:${PORT}`))
-);
+// Global error handlers for uncaught errors
+process.on('uncaughtException', (error) => {
+  console.error('💥 UNCAUGHT EXCEPTION:', error);
+  console.error('Stack:', error.stack);
+  // Log but don't exit immediately - let health checks detect the issue
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('💥 UNHANDLED REJECTION at:', promise);
+  console.error('Reason:', reason);
+  // Log but don't exit immediately
+});
+
+// Graceful shutdown handler
+const gracefulShutdown = async (signal) => {
+  if (isShuttingDown) {
+    console.log('Shutdown already in progress...');
+    return;
+  }
+  
+  isShuttingDown = true;
+  console.log(`\n${signal} received. Starting graceful shutdown...`);
+  
+  // Stop accepting new connections
+  server.close(async () => {
+    console.log('✅ HTTP server closed');
+    
+    try {
+      // Close database pool
+      await pool.end();
+      console.log('✅ Database pool closed');
+      
+      console.log('✅ Graceful shutdown complete');
+      process.exit(0);
+    } catch (err) {
+      console.error('❌ Error during shutdown:', err);
+      process.exit(1);
+    }
+  });
+  
+  // Force shutdown after 30 seconds
+  setTimeout(() => {
+    console.error('❌ Forced shutdown after timeout');
+    process.exit(1);
+  }, 30000);
+};
+
+// Register shutdown handlers
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+
+// Initialize database and start server
+let server;
+initTables()
+  .then(() => {
+    server = app.listen(PORT, '0.0.0.0', () => {
+      serverStartTime = Date.now();
+      console.log(`🚀 Backend running on http://localhost:${PORT}`);
+      console.log(`📊 Health endpoint: http://localhost:${PORT}/api/health`);
+      console.log(`🗄️  Database: ${pool.options.connectionString.split('@')[1].split('?')[0]}`);
+      console.log(`⏱️  Started at: ${new Date().toISOString()}`);
+    });
+    
+    // Handle server errors
+    server.on('error', (error) => {
+      if (error.code === 'EADDRINUSE') {
+        console.error(`❌ Port ${PORT} is already in use`);
+        process.exit(1);
+      } else {
+        console.error('❌ Server error:', error);
+      }
+    });
+  })
+  .catch((error) => {
+    console.error('❌ Failed to initialize database:', error);
+    process.exit(1);
+  });
