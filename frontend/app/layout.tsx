@@ -1,5 +1,6 @@
 import ThemeRegistry from "../components/ThemeRegistry";
 import PWA from "../components/PWA";
+import { AuthProvider } from "../contexts/AuthContext";
 import type { ReactNode } from "react";
 
 export const metadata = {
@@ -20,8 +21,10 @@ export default function RootLayout({ children }: { children: ReactNode }) {
     <html lang="no">
       <body>
         <ThemeRegistry>
-          <PWA />
-          {children}
+          <AuthProvider>
+            <PWA />
+            {children}
+          </AuthProvider>
         </ThemeRegistry>
       </body>
     </html>

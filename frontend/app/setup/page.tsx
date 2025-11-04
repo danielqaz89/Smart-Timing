@@ -70,10 +70,16 @@ export default function Setup() {
 
   // Update logo when company changes
   useEffect(() => {
-    const matchedCompany = companies.find(
-      c => form.bedrift.toLowerCase().includes(c.name.toLowerCase())
-    );
-    setCompanyLogo(matchedCompany?.logo_base64 || null);
+    // Check if it's Kinoa - use Imgur hosted logo
+    if (form.bedrift.toLowerCase().includes('kinoa')) {
+      setCompanyLogo('https://i.imgur.com/rNb7JRX.png');
+    } else {
+      // Try to find logo from database for other companies
+      const matchedCompany = companies.find(
+        c => form.bedrift.toLowerCase().includes(c.name.toLowerCase())
+      );
+      setCompanyLogo(matchedCompany?.logo_base64 || null);
+    }
   }, [form.bedrift, companies]);
 
   // BRREG search with debounce
@@ -147,11 +153,25 @@ export default function Setup() {
           <Stack spacing={2}>
             {companyLogo && (
               <Fade in={Boolean(companyLogo)}>
-                <Box sx={{ display: 'flex', justifyContent: 'center', py: 2 }}>
+                <Box sx={{ 
+                  display: 'flex', 
+                  justifyContent: 'center', 
+                  py: 2,
+                  px: 2,
+                  bgcolor: 'rgba(255, 255, 255, 0.05)',
+                  borderRadius: 2,
+                  mb: 1
+                }}>
                   <img 
                     src={companyLogo} 
                     alt="Company Logo" 
-                    style={{ maxWidth: '300px', maxHeight: '150px', objectFit: 'contain' }}
+                    style={{ 
+                      maxWidth: '300px', 
+                      maxHeight: '120px', 
+                      objectFit: 'contain',
+                      filter: 'brightness(0.95) contrast(1.05)',
+                      mixBlendMode: 'lighten'
+                    }}
                   />
                 </Box>
               </Fade>
