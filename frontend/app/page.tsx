@@ -63,7 +63,10 @@ function sanitizeRateInput(raw: string) {
   return out;
 }
 function parseRate(text: string) {
-  const n = parseFloat((text || "").split(".").join(",").replace(",", "."));
+  // Norwegian format uses comma as decimal separator (e.g., "1.234,56" or "500,00")
+  // Remove any dots (thousand separator), then replace comma with dot for parseFloat
+  const normalized = (text || "").replace(/\./g, '').replace(',', '.');
+  const n = parseFloat(normalized);
   return Number.isFinite(n) ? n : NaN;
 }
 function formatRate(n: number) {
