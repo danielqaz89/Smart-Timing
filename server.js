@@ -1478,6 +1478,100 @@ app.post("/api/reports/generate", async (req, res) => {
   }
 });
 
+// ===== GDPR COMPLIANCE ENDPOINTS =====
+// POST /api/gdpr/export-data - Export all user data (GDPR Right to Data Portability)
+// Body: { user_id?: 'default' }
+app.post("/api/gdpr/export-data", async (req, res) => {
+  try {
+    const { user_id = 'default' } = req.body;
+    
+    // Fetch all user data from all tables
+    const [logs, settings, projectInfo, templates, syncLog] = await Promise.all([
+      pool.query('SELECT * FROM log_row WHERE user_id = $1 ORDER BY date DESC, start_time DESC', [user_id]),
+      pool.query('SELECT * FROM user_settings WHERE user_id = $1', [user_id]),
+      pool.query('SELECT * FROM project_info WHERE user_id = $1 ORDER BY created_at DESC', [user_id]),
+      pool.query('SELECT * FROM quick_templates WHERE user_id = $1 ORDER BY display_order ASC', [user_id]),
+      pool.query('SELECT * FROM sync_log WHERE user_id = $1 ORDER BY created_at DESC LIMIT 100', [user_id]),
+    ]);
+    
+    // Remove sensitive fields from settings (passwords, tokens)
+    const sanitizedSettings = settings.rows[0] ? {
+      ...settings.rows[0],
+      smtp_app_password: settings.rows[0].smtp_app_password ? '[REDACTED]' : null,
+      google_access_token: settings.rows[0].google_access_token ? '[REDACTED]' : null,
+      google_refresh_token: settings.rows[0].google_refresh_token ? '[REDACTED]' : null,
+    } : null;
+    
+    const exportData = {
+      export_date: new Date().toISOString(),
+      user_id,
+      data: {
+        logs: logs.rows,
+        settings: sanitizedSettings,
+        projects: projectInfo.rows,
+        templates: templates.rows,
+        sync_history: syncLog.rows,
+      },
+      statistics: {
+        total_logs: logs.rows.length,
+        total_projects: projectInfo.rows.length,
+        total_templates: templates.rows.length,
+        total_syncs: syncLog.rows.length,
+      },
+      gdpr_notice: 'This export contains all your personal data stored in Smart Timing. You can use this to transfer your data to another service (data portability) or for your records.',
+    };
+    
+    res.json(exportData);
+  } catch (e) {
+    console.error('GDPR export error:', e);
+    res.status(500).json({ error: 'Failed to export user data', details: String(e) });
+  }
+});
+
+// DELETE /api/gdpr/delete-account - Permanently delete all user data (GDPR Right to be Forgotten)
+// Body: { user_id?: 'default', confirmation: 'DELETE_MY_ACCOUNT' }
+app.delete("/api/gdpr/delete-account", async (req, res) => {
+  try {
+    const { user_id = 'default', confirmation } = req.body;
+    
+    // Require explicit confirmation to prevent accidental deletions
+    if (confirmation !== 'DELETE_MY_ACCOUNT') {
+      return res.status(400).json({ 
+        error: 'Confirmation required', 
+        message: 'You must provide confirmation: "DELETE_MY_ACCOUNT"' 
+      });
+    }
+    
+    // Delete all user data from all tables (cascading deletes will handle log_row via FK)
+    const results = await Promise.all([
+      pool.query('DELETE FROM log_row WHERE user_id = $1', [user_id]),
+      pool.query('DELETE FROM user_settings WHERE user_id = $1', [user_id]),
+      pool.query('DELETE FROM project_info WHERE user_id = $1', [user_id]),
+      pool.query('DELETE FROM quick_templates WHERE user_id = $1', [user_id]),
+      pool.query('DELETE FROM sync_log WHERE user_id = $1', [user_id]),
+    ]);
+    
+    const totalDeleted = results.reduce((sum, r) => sum + r.rowCount, 0);
+    
+    res.json({
+      success: true,
+      message: 'All user data has been permanently deleted',
+      deleted_records: {
+        logs: results[0].rowCount,
+        settings: results[1].rowCount,
+        projects: results[2].rowCount,
+        templates: results[3].rowCount,
+        sync_history: results[4].rowCount,
+        total: totalDeleted,
+      },
+      timestamp: new Date().toISOString(),
+    });
+  } catch (e) {
+    console.error('GDPR account deletion error:', e);
+    res.status(500).json({ error: 'Failed to delete account', details: String(e) });
+  }
+});
+
 const PORT = process.env.PORT || 4000;
 initTables().then(() =>
   app.listen(PORT, () => console.log(`🚀 Backend running on http://localhost:${PORT}`))
