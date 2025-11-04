@@ -63,7 +63,28 @@ For production (Render), set these environment variables in your dashboard:
 - `GOOGLE_REDIRECT_URI` (use your production URL)
 - `FRONTEND_URL` (your frontend Vercel URL)
 
-### 3. Database Migration
+### 3. Grant Service Account Impersonation Permission
+
+**IMPORTANT**: If you're using service account impersonation (`GOOGLE_USE_IMPERSONATION=true`), you must grant your Google account permission to impersonate the service account.
+
+1. Go to [Google Cloud Console](https://console.cloud.google.com/)
+2. Navigate to **IAM & Admin** → **IAM** (main IAM page, not Service Accounts)
+3. Click **"Grant Access"** or **"Add"**
+4. Add your personal Google email (the one you'll use to log in to Smart-Timing)
+5. Assign role: **Service Account Token Creator**
+6. Click **"Save"**
+
+**Alternative method via gcloud CLI:**
+```bash
+gcloud iam service-accounts add-iam-policy-binding \
+  smarttiming@api-auth-463802.iam.gserviceaccount.com \
+  --member="user:YOUR_EMAIL@gmail.com" \
+  --role="roles/iam.serviceAccountTokenCreator"
+```
+
+Without this permission, you'll get authentication errors when trying to sync to Google Sheets.
+
+### 4. Database Migration
 
 The database schema has been updated to store OAuth tokens. Restart your backend server to apply the migrations automatically, or run:
 
