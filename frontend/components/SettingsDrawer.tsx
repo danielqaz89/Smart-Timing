@@ -25,6 +25,7 @@ import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
 import SettingsIcon from "@mui/icons-material/Settings";
 import { useUserSettings } from "../lib/hooks";
 import { useSnackbar } from "notistack";
+import GoogleSheetsPicker from "./GoogleSheetsPicker";
 
 // Locale-safe helpers for Timesats input (Norwegian)
 const nbFormatter = new Intl.NumberFormat('nb-NO', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -268,15 +269,27 @@ export default function SettingsDrawer() {
                       placeholder="https://hooks.zapier.com/..."
                       type="url"
                     />
-                    <TextField
-                      label="Google Sheets URL"
-                      value={sheetUrl}
-                      onChange={(e) => setSheetUrl(e.target.value)}
-                      fullWidth
-                      disabled={saving}
-                      placeholder="https://docs.google.com/spreadsheets/..."
-                      type="url"
-                    />
+                    <Stack direction="row" spacing={1} alignItems="flex-start">
+                      <TextField
+                        label="Google Sheets URL"
+                        value={sheetUrl}
+                        onChange={(e) => setSheetUrl(e.target.value)}
+                        fullWidth
+                        disabled={saving}
+                        placeholder="https://docs.google.com/spreadsheets/..."
+                        type="url"
+                        helperText="Eller bruk 'Browse' for å velge fra Google Drive"
+                      />
+                      <GoogleSheetsPicker
+                        onSheetSelected={(url, name) => {
+                          setSheetUrl(url);
+                          enqueueSnackbar(`Valgt: ${name}`, { variant: "success" });
+                        }}
+                        onError={(error) => {
+                          enqueueSnackbar(error, { variant: "error" });
+                        }}
+                      />
+                    </Stack>
                     <Typography variant="caption" color="text.secondary">
                       Webhook sender data til eksterne systemer. Sheets-URL for toveis synk.
                     </Typography>

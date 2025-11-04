@@ -633,6 +633,7 @@ app.get("/api/auth/google", async (req, res) => {
       scope: [
         'https://www.googleapis.com/auth/spreadsheets',
         'https://www.googleapis.com/auth/userinfo.email',
+        'https://www.googleapis.com/auth/drive.readonly', // For Google Picker
       ],
       state: user_id, // Pass user_id through state parameter
       prompt: 'consent', // Force consent screen to get refresh token
@@ -733,6 +734,65 @@ app.get("/api/auth/google/status", async (req, res) => {
     });
   } catch (e) {
     console.error('Status check error:', e);
+    res.status(500).json({ error: String(e) });
+  }
+});
+
+// GET /api/auth/google/token - Get access token for Google Picker
+// Query: { user_id?: 'default' }
+app.get("/api/auth/google/token", async (req, res) => {
+  try {
+    const user_id = req.query.user_id || 'default';
+    
+    const result = await pool.query(
+      'SELECT google_access_token, google_refresh_token, google_token_expiry FROM user_settings WHERE user_id = $1',
+      [user_id]
+    );
+    
+    const settings = result.rows[0];
+    
+    if (!settings?.google_access_token) {
+      return res.status(401).json({ error: 'Not authenticated' });
+    }
+    
+    let accessToken = settings.google_access_token;
+    
+    // Check if token is expired and refresh if needed
+    if (settings.google_token_expiry && new Date(settings.google_token_expiry) < new Date()) {
+      if (!settings.google_refresh_token) {
+        return res.status(401).json({ error: 'Token expired and no refresh token available' });
+      }
+      
+      try {
+        const oauth2Client = getOAuth2Client();
+        oauth2Client.setCredentials({
+          refresh_token: settings.google_refresh_token,
+        });
+        
+        const { credentials } = await oauth2Client.refreshAccessToken();
+        accessToken = credentials.access_token;
+        
+        // Update token in database
+        await pool.query(`
+          UPDATE user_settings
+          SET google_access_token = $1,
+              google_token_expiry = $2,
+              updated_at = NOW()
+          WHERE user_id = $3
+        `, [
+          accessToken,
+          credentials.expiry_date ? new Date(credentials.expiry_date) : null,
+          user_id,
+        ]);
+      } catch (refreshError) {
+        console.error('Token refresh error:', refreshError);
+        return res.status(401).json({ error: 'Failed to refresh token' });
+      }
+    }
+    
+    res.json({ accessToken });
+  } catch (e) {
+    console.error('Get token error:', e);
     res.status(500).json({ error: String(e) });
   }
 });
