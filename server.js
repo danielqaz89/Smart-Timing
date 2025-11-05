@@ -12,6 +12,14 @@ import jwt from "jsonwebtoken";
 import bcrypt from "bcrypt";
 import crypto from "crypto";
 import process from "process";
+import formidable from "formidable";
+import fs from "fs";
+import path from "path";
+import { fileURLToPath } from "url";
+
+// ES module __dirname equivalent
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 dotenv.config();
 const app = express();
@@ -62,6 +70,14 @@ app.use(
   })
 );
 app.use(express.json({ limit: '10mb' })); // Prevent payload too large errors
+
+// Serve uploaded media files
+const uploadsDir = path.join(__dirname, 'uploads');
+if (!fs.existsSync(uploadsDir)) {
+  fs.mkdirSync(uploadsDir, { recursive: true });
+  console.log('✅ Created uploads directory');
+}
+app.use('/uploads', express.static(uploadsDir));
 
 // Global error handler for JSON parsing errors
 app.use((err, req, res, next) => {
@@ -3116,18 +3132,72 @@ app.get("/api/admin/cms/media", authenticateAdmin, requireAdminRole('super_admin
 
 // POST /api/admin/cms/media - Upload media file
 app.post("/api/admin/cms/media", authenticateAdmin, requireAdminRole('super_admin', 'admin'), async (req, res) => {
-  try {
-    // Note: This is a placeholder - you'll need to add multipart/form-data parsing middleware
-    // like 'multer' or 'formidable' to handle file uploads properly
-    // For now, return a 501 Not Implemented
-    res.status(501).json({ 
-      error: 'File upload not fully implemented',
-      message: 'Add multer middleware to handle multipart/form-data uploads'
-    });
-  } catch (e) {
-    console.error('CMS media upload error:', e);
-    res.status(500).json({ error: 'Failed to upload media', details: String(e) });
-  }
+  const form = formidable({
+    uploadDir: uploadsDir,
+    keepExtensions: true,
+    maxFileSize: 50 * 1024 * 1024, // 50MB max
+    filter: ({ mimetype }) => {
+      // Allow images, videos, and documents
+      return mimetype && (
+        mimetype.startsWith('image/') ||
+        mimetype.startsWith('video/') ||
+        ['application/pdf', 'application/msword', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'].includes(mimetype)
+      );
+    },
+  });
+
+  form.parse(req, async (err, fields, files) => {
+    if (err) {
+      console.error('File upload parse error:', err);
+      return res.status(400).json({ error: 'Failed to parse upload', details: String(err) });
+    }
+
+    try {
+      const file = files.file?.[0] || files.file;
+      if (!file) {
+        return res.status(400).json({ error: 'No file provided' });
+      }
+
+      const originalFilename = file.originalFilename || 'unknown';
+      const filename = path.basename(file.filepath);
+      const fileType = file.mimetype || 'application/octet-stream';
+      const fileSize = file.size;
+      const url = `/uploads/${filename}`;
+
+      // Save to database
+      const result = await pool.query(
+        `INSERT INTO cms_media (filename, original_filename, file_type, file_size, url, uploaded_by)
+         VALUES ($1, $2, $3, $4, $5, $6)
+         RETURNING *`,
+        [filename, originalFilename, fileType, fileSize, url, req.adminUser.id]
+      );
+
+      await logAdminAction(
+        req.adminUser.id,
+        'cms_media_uploaded',
+        'cms_media',
+        result.rows[0].id,
+        { filename: originalFilename, size: fileSize },
+        req.ip
+      );
+
+      res.json({
+        success: true,
+        file: {
+          id: result.rows[0].id,
+          filename: result.rows[0].filename,
+          original_filename: result.rows[0].original_filename,
+          type: result.rows[0].file_type,
+          size: result.rows[0].file_size,
+          url: result.rows[0].url,
+          uploaded_at: result.rows[0].created_at,
+        },
+      });
+    } catch (e) {
+      console.error('CMS media upload error:', e);
+      res.status(500).json({ error: 'Failed to upload media', details: String(e) });
+    }
+  });
 });
 
 // DELETE /api/admin/cms/media/:id - Delete media file
@@ -3139,6 +3209,12 @@ app.delete("/api/admin/cms/media/:id", authenticateAdmin, requireAdminRole('supe
     const file = await pool.query('SELECT * FROM cms_media WHERE id = $1', [id]);
     if (file.rows.length === 0) {
       return res.status(404).json({ error: 'File not found' });
+    }
+    
+    // Delete file from filesystem
+    const filePath = path.join(__dirname, file.rows[0].url);
+    if (fs.existsSync(filePath)) {
+      fs.unlinkSync(filePath);
     }
     
     // Delete from database
