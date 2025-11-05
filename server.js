@@ -1927,6 +1927,164 @@ app.delete("/api/admin/companies/:companyId/users/:id/cases/:caseId", authentica
   }
 });
 
+// ===== COMPANY PORTAL AUTH (GOOGLE) =====
+const COMPANY_SESSION_HOURS = 24;
+
+function authenticateCompany(req, res, next) {
+  const authHeader = req.headers.authorization;
+  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    return res.status(401).json({ error: 'No token provided' });
+  }
+  try {
+    const decoded = jwt.verify(authHeader.substring(7), JWT_SECRET);
+    if (decoded?.type !== 'company') return res.status(401).json({ error: 'Invalid token' });
+    req.companyUser = decoded; // { company_id, user_id, email, role, type }
+    next();
+  } catch (e) {
+    return res.status(401).json({ error: 'Invalid or expired token' });
+  }
+}
+
+function requireCompanyRole(...roles) {
+  return (req, res, next) => {
+    if (!req.companyUser) return res.status(401).json({ error: 'Not authenticated' });
+    if (!roles.includes(req.companyUser.role)) return res.status(403).json({ error: 'Insufficient permissions' });
+    next();
+  };
+}
+
+// Initiate Google OAuth2 for company portal (email only)
+app.get('/api/company/auth/google', async (req, res) => {
+  try {
+    const oauth2Client = getOAuth2Client();
+    const scopes = ['https://www.googleapis.com/auth/userinfo.email'];
+    const authUrl = oauth2Client.generateAuthUrl({ access_type: 'online', scope: scopes, prompt: 'consent' });
+    res.redirect(authUrl);
+  } catch (e) {
+    console.error('Company auth init error:', e);
+    res.status(500).send('Auth init failed');
+  }
+});
+
+// Google OAuth2 callback for company portal
+app.get('/api/company/auth/google/callback', async (req, res) => {
+  try {
+    const { code } = req.query;
+    if (!code) return res.status(400).send('Missing code');
+
+    const oauth2Client = getOAuth2Client();
+    const { tokens } = await oauth2Client.getToken(code);
+    oauth2Client.setCredentials(tokens);
+
+    // Get user email
+    const oauth2 = google.oauth2({ version: 'v2', auth: oauth2Client });
+    const userInfo = await oauth2.userinfo.get();
+    const email = String(userInfo.data.email || '').toLowerCase();
+
+    // Match company user by google_email or user_email and approved
+    const result = await pool.query(`
+      SELECT cu.*, c.name as company_name
+      FROM company_users cu
+      JOIN companies c ON c.id = cu.company_id
+      WHERE (LOWER(cu.google_email) = $1 OR LOWER(cu.user_email) = $1) AND cu.approved = TRUE
+      LIMIT 1
+    `, [email]);
+
+    if (result.rows.length === 0) {
+      const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
+      return res.redirect(`${frontendUrl}/portal?company_auth=error&message=${encodeURIComponent('Not approved for any company')}`);
+    }
+
+    const cu = result.rows[0];
+    const token = jwt.sign({ type: 'company', company_id: cu.company_id, user_id: cu.id, email, role: cu.role }, JWT_SECRET, { expiresIn: `${COMPANY_SESSION_HOURS}h` });
+
+    const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
+    res.redirect(`${frontendUrl}/portal?company_auth=success&token=${encodeURIComponent(token)}&company=${encodeURIComponent(cu.company_name)}&role=${encodeURIComponent(cu.role)}`);
+  } catch (e) {
+    console.error('Company auth callback error:', e);
+    const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
+    res.redirect(`${frontendUrl}/portal?company_auth=error&message=${encodeURIComponent(String(e))}`);
+  }
+});
+
+// Company self-service endpoints
+app.get('/api/company/me', authenticateCompany, async (req, res) => {
+  try {
+    const c = await pool.query('SELECT id, name, logo_base64 FROM companies WHERE id = $1', [req.companyUser.company_id]);
+    res.json({ company: c.rows[0] || null, user: { email: req.companyUser.email, role: req.companyUser.role, id: req.companyUser.user_id } });
+  } catch (e) { res.status(500).json({ error: String(e) }); }
+});
+
+app.get('/api/company/users', authenticateCompany, async (req, res) => {
+  try {
+    const users = (await pool.query(`
+      SELECT cu.id, cu.user_email, cu.google_email, cu.role, cu.approved,
+             COALESCE(json_agg(json_build_object('id', uc.id, 'case_id', uc.case_id) ORDER BY uc.created_at)
+                      FILTER (WHERE uc.id IS NOT NULL), '[]') AS cases
+      FROM company_users cu
+      LEFT JOIN user_cases uc ON uc.company_user_id = cu.id
+      WHERE cu.company_id = $1
+      GROUP BY cu.id
+      ORDER BY cu.created_at DESC
+    `, [req.companyUser.company_id])).rows;
+    res.json({ users });
+  } catch (e) { res.status(500).json({ error: String(e) }); }
+});
+
+app.post('/api/company/users', authenticateCompany, requireCompanyRole('admin'), async (req, res) => {
+  try {
+    const { user_email, google_email, role = 'member', approved = false } = req.body || {};
+    if (!user_email) return res.status(400).json({ error: 'user_email is required' });
+    const result = await pool.query(`
+      INSERT INTO company_users (company_id, user_email, google_email, role, approved)
+      VALUES ($1, $2, $3, $4, $5)
+      ON CONFLICT (company_id, user_email)
+      DO UPDATE SET google_email = COALESCE($3, company_users.google_email), role = COALESCE($4, company_users.role), approved = COALESCE($5, company_users.approved), updated_at = NOW()
+      RETURNING *
+    `, [req.companyUser.company_id, user_email, google_email || null, role, approved]);
+    res.json(result.rows[0]);
+  } catch (e) { res.status(500).json({ error: String(e) }); }
+});
+
+app.patch('/api/company/users/:id', authenticateCompany, requireCompanyRole('admin'), async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { approved, role, google_email } = req.body || {};
+    const updates = [];
+    const vals = [];
+    if (approved !== undefined) { updates.push(`approved = $${updates.length+1}`); vals.push(Boolean(approved)); }
+    if (role !== undefined) { updates.push(`role = $${updates.length+1}`); vals.push(role); }
+    if (google_email !== undefined) { updates.push(`google_email = $${updates.length+1}`); vals.push(google_email); }
+    if (!updates.length) return res.status(400).json({ error: 'No fields to update' });
+    vals.push(id, req.companyUser.company_id);
+    const result = await pool.query(`UPDATE company_users SET ${updates.join(', ')}, updated_at = NOW() WHERE id = $${vals.length-1} AND company_id = $${vals.length} RETURNING *`, vals);
+    res.json(result.rows[0]);
+  } catch (e) { res.status(500).json({ error: String(e) }); }
+});
+
+app.delete('/api/company/users/:id', authenticateCompany, requireCompanyRole('admin'), async (req, res) => {
+  try {
+    await pool.query('DELETE FROM company_users WHERE id = $1 AND company_id = $2', [req.params.id, req.companyUser.company_id]);
+    res.json({ success: true });
+  } catch (e) { res.status(500).json({ error: String(e) }); }
+});
+
+app.post('/api/company/users/:id/cases', authenticateCompany, requireCompanyRole('admin'), async (req, res) => {
+  try {
+    const { case_id, notes } = req.body || {};
+    if (!case_id) return res.status(400).json({ error: 'case_id is required' });
+    const result = await pool.query('INSERT INTO user_cases (company_user_id, case_id, notes) VALUES ($1, $2, $3) ON CONFLICT (company_user_id, case_id) DO NOTHING RETURNING *', [req.params.id, case_id, notes || null]);
+    res.json(result.rows[0] || { ok: true });
+  } catch (e) { res.status(500).json({ error: String(e) }); }
+});
+
+app.delete('/api/company/users/:id/cases/:caseId', authenticateCompany, requireCompanyRole('admin'), async (req, res) => {
+  try {
+    const result = await pool.query('DELETE FROM user_cases WHERE company_user_id = $1 AND id = $2', [req.params.id, req.params.caseId]);
+    res.json({ deleted: result.rowCount });
+  } catch (e) { res.status(500).json({ error: String(e) }); }
+});
+
 // ===== ADMIN USER MANAGEMENT ENDPOINTS =====
 // GET /api/admin/users - List all users with stats
 app.get("/api/admin/users", authenticateAdmin, requireAdminRole('super_admin', 'admin', 'moderator'), async (req, res) => {
