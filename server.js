@@ -282,6 +282,59 @@ async function initTables(){
       updated_by INT REFERENCES admin_users(id),
       updated_at TIMESTAMP DEFAULT NOW()
     );
+    
+    -- CMS Pages table (for landing page content)
+    CREATE TABLE IF NOT EXISTS cms_pages (
+      id SERIAL PRIMARY KEY,
+      page_id TEXT UNIQUE NOT NULL,
+      page_name TEXT NOT NULL,
+      sections JSONB NOT NULL DEFAULT '[]'::jsonb,
+      meta JSONB NOT NULL DEFAULT '{}'::jsonb,
+      is_published BOOLEAN DEFAULT false,
+      updated_by INT REFERENCES admin_users(id),
+      created_at TIMESTAMP DEFAULT NOW(),
+      updated_at TIMESTAMP DEFAULT NOW()
+    );
+    
+    -- CMS Themes table (for global and company themes)
+    CREATE TABLE IF NOT EXISTS cms_themes (
+      id SERIAL PRIMARY KEY,
+      theme_id TEXT UNIQUE NOT NULL,
+      theme_name TEXT NOT NULL,
+      theme_type TEXT CHECK (theme_type IN ('global', 'company')) DEFAULT 'global',
+      company_id INT DEFAULT NULL,
+      colors JSONB NOT NULL DEFAULT '{}'::jsonb,
+      typography JSONB NOT NULL DEFAULT '{}'::jsonb,
+      spacing JSONB NOT NULL DEFAULT '{}'::jsonb,
+      is_active BOOLEAN DEFAULT true,
+      updated_by INT REFERENCES admin_users(id),
+      created_at TIMESTAMP DEFAULT NOW(),
+      updated_at TIMESTAMP DEFAULT NOW()
+    );
+    
+    -- CMS Translations table (for i18n)
+    CREATE TABLE IF NOT EXISTS cms_translations (
+      id SERIAL PRIMARY KEY,
+      translation_key TEXT UNIQUE NOT NULL,
+      category TEXT NOT NULL,
+      no TEXT,
+      en TEXT,
+      updated_by INT REFERENCES admin_users(id),
+      created_at TIMESTAMP DEFAULT NOW(),
+      updated_at TIMESTAMP DEFAULT NOW()
+    );
+    
+    -- CMS Media Library table (for uploaded files)
+    CREATE TABLE IF NOT EXISTS cms_media (
+      id SERIAL PRIMARY KEY,
+      filename TEXT NOT NULL,
+      original_filename TEXT NOT NULL,
+      file_type TEXT NOT NULL,
+      file_size INT NOT NULL,
+      url TEXT NOT NULL,
+      uploaded_by INT REFERENCES admin_users(id),
+      created_at TIMESTAMP DEFAULT NOW()
+    );
   `);
   
   // CMS translations table
@@ -390,6 +443,14 @@ async function initTables(){
     CREATE INDEX IF NOT EXISTS idx_admin_audit_log_admin ON admin_audit_log(admin_id, created_at DESC);
     CREATE INDEX IF NOT EXISTS idx_admin_audit_log_action ON admin_audit_log(action, created_at DESC);
     CREATE INDEX IF NOT EXISTS idx_system_settings_key ON system_settings(setting_key);
+    CREATE INDEX IF NOT EXISTS idx_cms_pages_page_id ON cms_pages(page_id);
+    CREATE INDEX IF NOT EXISTS idx_cms_pages_published ON cms_pages(is_published);
+    CREATE INDEX IF NOT EXISTS idx_cms_themes_theme_id ON cms_themes(theme_id);
+    CREATE INDEX IF NOT EXISTS idx_cms_themes_type_company ON cms_themes(theme_type, company_id) WHERE theme_type = 'company';
+    CREATE INDEX IF NOT EXISTS idx_cms_translations_key ON cms_translations(translation_key);
+    CREATE INDEX IF NOT EXISTS idx_cms_translations_category ON cms_translations(category);
+    CREATE INDEX IF NOT EXISTS idx_cms_media_uploaded_by ON cms_media(uploaded_by, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_cms_media_file_type ON cms_media(file_type);
   `);
   console.log("✅ Tables initialized with persistence schema");
   
@@ -2851,6 +2912,282 @@ app.put("/api/admin/settings/:key", authenticateAdmin, requireAdminRole('super_a
   } catch (e) {
     console.error('Admin settings update error:', e);
     res.status(500).json({ error: 'Failed to update setting', details: String(e) });
+  }
+});
+
+// ===== CMS ENDPOINTS =====
+// GET /api/admin/cms/pages/:pageId - Get page content
+app.get("/api/admin/cms/pages/:pageId", authenticateAdmin, requireAdminRole('super_admin', 'admin'), async (req, res) => {
+  try {
+    const { pageId } = req.params;
+    const result = await pool.query('SELECT * FROM cms_pages WHERE page_id = $1', [pageId]);
+    
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Page not found' });
+    }
+    
+    res.json(result.rows[0]);
+  } catch (e) {
+    console.error('CMS page fetch error:', e);
+    res.status(500).json({ error: 'Failed to fetch page', details: String(e) });
+  }
+});
+
+// PUT /api/admin/cms/pages/:pageId - Update page content
+app.put("/api/admin/cms/pages/:pageId", authenticateAdmin, requireAdminRole('super_admin', 'admin'), async (req, res) => {
+  try {
+    const { pageId } = req.params;
+    const { page_name, sections, meta, is_published } = req.body;
+    
+    const result = await pool.query(
+      `INSERT INTO cms_pages (page_id, page_name, sections, meta, is_published, updated_by)
+       VALUES ($1, $2, $3, $4, $5, $6)
+       ON CONFLICT (page_id)
+       DO UPDATE SET 
+         page_name = $2,
+         sections = $3,
+         meta = $4,
+         is_published = COALESCE($5, cms_pages.is_published),
+         updated_by = $6,
+         updated_at = NOW()
+       RETURNING *`,
+      [pageId, page_name, JSON.stringify(sections), JSON.stringify(meta), is_published, req.adminUser.id]
+    );
+    
+    await logAdminAction(
+      req.adminUser.id,
+      'cms_page_updated',
+      'cms_page',
+      pageId,
+      { page_name },
+      req.ip
+    );
+    
+    res.json(result.rows[0]);
+  } catch (e) {
+    console.error('CMS page update error:', e);
+    res.status(500).json({ error: 'Failed to update page', details: String(e) });
+  }
+});
+
+// GET /api/admin/cms/themes/:themeId - Get theme config
+app.get("/api/admin/cms/themes/:themeId", authenticateAdmin, requireAdminRole('super_admin', 'admin'), async (req, res) => {
+  try {
+    const { themeId } = req.params;
+    const result = await pool.query('SELECT * FROM cms_themes WHERE theme_id = $1 AND is_active = true', [themeId]);
+    
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Theme not found' });
+    }
+    
+    res.json(result.rows[0]);
+  } catch (e) {
+    console.error('CMS theme fetch error:', e);
+    res.status(500).json({ error: 'Failed to fetch theme', details: String(e) });
+  }
+});
+
+// PUT /api/admin/cms/themes/:themeId - Update theme config
+app.put("/api/admin/cms/themes/:themeId", authenticateAdmin, requireAdminRole('super_admin', 'admin'), async (req, res) => {
+  try {
+    const { themeId } = req.params;
+    const { theme_name, colors, typography, spacing } = req.body;
+    
+    const result = await pool.query(
+      `INSERT INTO cms_themes (theme_id, theme_name, theme_type, colors, typography, spacing, updated_by)
+       VALUES ($1, $2, 'global', $3, $4, $5, $6)
+       ON CONFLICT (theme_id)
+       DO UPDATE SET 
+         theme_name = $2,
+         colors = $3,
+         typography = $4,
+         spacing = $5,
+         updated_by = $6,
+         updated_at = NOW()
+       RETURNING *`,
+      [themeId, theme_name, JSON.stringify(colors), JSON.stringify(typography), JSON.stringify(spacing), req.adminUser.id]
+    );
+    
+    await logAdminAction(
+      req.adminUser.id,
+      'cms_theme_updated',
+      'cms_theme',
+      themeId,
+      { theme_name },
+      req.ip
+    );
+    
+    res.json(result.rows[0]);
+  } catch (e) {
+    console.error('CMS theme update error:', e);
+    res.status(500).json({ error: 'Failed to update theme', details: String(e) });
+  }
+});
+
+// GET /api/admin/cms/translations - Get all translations
+app.get("/api/admin/cms/translations", authenticateAdmin, requireAdminRole('super_admin', 'admin'), async (req, res) => {
+  try {
+    const result = await pool.query('SELECT * FROM cms_translations ORDER BY category, translation_key');
+    
+    // Convert to object format expected by frontend
+    const translations = result.rows.reduce((acc, row) => {
+      acc[row.translation_key] = {
+        key: row.translation_key,
+        category: row.category,
+        no: row.no,
+        en: row.en,
+      };
+      return acc;
+    }, {});
+    
+    res.json(translations);
+  } catch (e) {
+    console.error('CMS translations fetch error:', e);
+    res.status(500).json({ error: 'Failed to fetch translations', details: String(e) });
+  }
+});
+
+// PUT /api/admin/cms/translations - Update all translations
+app.put("/api/admin/cms/translations", authenticateAdmin, requireAdminRole('super_admin', 'admin'), async (req, res) => {
+  try {
+    const translations = req.body;
+    
+    // Delete all existing translations and insert new ones (simpler than complex upsert)
+    await pool.query('DELETE FROM cms_translations');
+    
+    const values = [];
+    const params = [];
+    let paramCounter = 1;
+    
+    Object.values(translations).forEach((t) => {
+      values.push(`($${paramCounter}, $${paramCounter+1}, $${paramCounter+2}, $${paramCounter+3}, $${paramCounter+4})`);
+      params.push(t.key, t.category, t.no, t.en, req.adminUser.id);
+      paramCounter += 5;
+    });
+    
+    if (values.length > 0) {
+      await pool.query(
+        `INSERT INTO cms_translations (translation_key, category, no, en, updated_by) VALUES ${values.join(', ')}`,
+        params
+      );
+    }
+    
+    await logAdminAction(
+      req.adminUser.id,
+      'cms_translations_updated',
+      'cms_translations',
+      null,
+      { count: Object.keys(translations).length },
+      req.ip
+    );
+    
+    res.json({ success: true, count: Object.keys(translations).length });
+  } catch (e) {
+    console.error('CMS translations update error:', e);
+    res.status(500).json({ error: 'Failed to update translations', details: String(e) });
+  }
+});
+
+// GET /api/admin/cms/media - Get media library
+app.get("/api/admin/cms/media", authenticateAdmin, requireAdminRole('super_admin', 'admin'), async (req, res) => {
+  try {
+    const result = await pool.query(
+      `SELECT 
+         id,
+         filename,
+         original_filename,
+         file_type as type,
+         file_size as size,
+         url,
+         uploaded_by,
+         created_at as uploaded_at,
+         au.email as uploaded_by_email
+       FROM cms_media cm
+       LEFT JOIN admin_users au ON au.id = cm.uploaded_by
+       ORDER BY cm.created_at DESC`
+    );
+    
+    res.json(result.rows);
+  } catch (e) {
+    console.error('CMS media fetch error:', e);
+    res.status(500).json({ error: 'Failed to fetch media', details: String(e) });
+  }
+});
+
+// POST /api/admin/cms/media - Upload media file
+app.post("/api/admin/cms/media", authenticateAdmin, requireAdminRole('super_admin', 'admin'), async (req, res) => {
+  try {
+    // Note: This is a placeholder - you'll need to add multipart/form-data parsing middleware
+    // like 'multer' or 'formidable' to handle file uploads properly
+    // For now, return a 501 Not Implemented
+    res.status(501).json({ 
+      error: 'File upload not fully implemented',
+      message: 'Add multer middleware to handle multipart/form-data uploads'
+    });
+  } catch (e) {
+    console.error('CMS media upload error:', e);
+    res.status(500).json({ error: 'Failed to upload media', details: String(e) });
+  }
+});
+
+// DELETE /api/admin/cms/media/:id - Delete media file
+app.delete("/api/admin/cms/media/:id", authenticateAdmin, requireAdminRole('super_admin', 'admin'), async (req, res) => {
+  try {
+    const { id } = req.params;
+    
+    // Get file info before deleting
+    const file = await pool.query('SELECT * FROM cms_media WHERE id = $1', [id]);
+    if (file.rows.length === 0) {
+      return res.status(404).json({ error: 'File not found' });
+    }
+    
+    // Delete from database
+    await pool.query('DELETE FROM cms_media WHERE id = $1', [id]);
+    
+    await logAdminAction(
+      req.adminUser.id,
+      'cms_media_deleted',
+      'cms_media',
+      id,
+      { filename: file.rows[0].filename },
+      req.ip
+    );
+    
+    res.json({ success: true });
+  } catch (e) {
+    console.error('CMS media deletion error:', e);
+    res.status(500).json({ error: 'Failed to delete media', details: String(e) });
+  }
+});
+
+// ===== COMPANY THEME ENDPOINTS =====
+// Note: These are placeholder endpoints. You'll need to implement company auth middleware
+// GET /api/company/theme - Get company theme
+app.get("/api/company/theme", async (req, res) => {
+  try {
+    // TODO: Add company authentication middleware
+    // For now, return default theme or 404
+    res.status(404).json({ error: 'Company theme not implemented yet' });
+  } catch (e) {
+    console.error('Company theme fetch error:', e);
+    res.status(500).json({ error: 'Failed to fetch theme', details: String(e) });
+  }
+});
+
+// PUT /api/company/theme - Update company theme
+app.put("/api/company/theme", async (req, res) => {
+  try {
+    // TODO: Add company authentication middleware
+    // TODO: Get company_id from auth token
+    const { primary_color, secondary_color } = req.body;
+    
+    res.status(501).json({ 
+      error: 'Company theme updates not fully implemented',
+      message: 'Need to implement company authentication first'
+    });
+  } catch (e) {
+    console.error('Company theme update error:', e);
+    res.status(500).json({ error: 'Failed to update theme', details: String(e) });
   }
 });
 
