@@ -132,6 +132,19 @@ async function initTables(){
       created_at TIMESTAMP DEFAULT NOW(),
       UNIQUE(company_user_id, case_id)
     );
+
+    -- Company invites table
+    CREATE TABLE IF NOT EXISTS company_invites (
+      id SERIAL PRIMARY KEY,
+      company_id INT NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+      invited_email TEXT NOT NULL,
+      role TEXT CHECK (role IN ('member','admin')) DEFAULT 'member',
+      token TEXT UNIQUE NOT NULL DEFAULT gen_random_uuid()::text,
+      expires_at TIMESTAMP DEFAULT (NOW() + INTERVAL '7 days'),
+      used_at TIMESTAMP,
+      invited_by INT,
+      created_at TIMESTAMP DEFAULT NOW()
+    );
     
     -- Project info table (enhanced)
     CREATE TABLE IF NOT EXISTS project_info(
@@ -278,6 +291,8 @@ async function initTables(){
     CREATE INDEX IF NOT EXISTS idx_company_users_email ON company_users(user_email);
     CREATE INDEX IF NOT EXISTS idx_user_cases_user ON user_cases(company_user_id);
     CREATE INDEX IF NOT EXISTS idx_user_cases_case ON user_cases(case_id);
+    CREATE INDEX IF NOT EXISTS idx_company_invites_company ON company_invites(company_id, invited_email);
+    CREATE INDEX IF NOT EXISTS idx_company_invites_token ON company_invites(token);
 
     CREATE INDEX IF NOT EXISTS idx_log_row_date ON log_row (date DESC, start_time DESC);
     CREATE INDEX IF NOT EXISTS idx_log_row_user ON log_row(user_id, date DESC);
@@ -2083,6 +2098,96 @@ app.delete('/api/company/users/:id/cases/:caseId', authenticateCompany, requireC
     const result = await pool.query('DELETE FROM user_cases WHERE company_user_id = $1 AND id = $2', [req.params.id, req.params.caseId]);
     res.json({ deleted: result.rowCount });
   } catch (e) { res.status(500).json({ error: String(e) }); }
+});
+
+// Company invites
+app.get('/api/company/invites', authenticateCompany, requireCompanyRole('admin'), async (req, res) => {
+  try {
+    const rows = (await pool.query('SELECT id, invited_email, role, token, expires_at, used_at, created_at FROM company_invites WHERE company_id = $1 ORDER BY created_at DESC', [req.companyUser.company_id])).rows;
+    res.json({ invites: rows });
+  } catch (e) { res.status(500).json({ error: String(e) }); }
+});
+
+async function sendInviteEmail(to, link, companyName) {
+  const provider = process.env.SMTP_HOST ? {
+    host: process.env.SMTP_HOST,
+    port: Number(process.env.SMTP_PORT || 587),
+    secure: String(process.env.SMTP_SECURE || "false").toLowerCase() === "true",
+  } : guessSmtpByEmail(to);
+  const authUser = process.env.SMTP_USER || process.env.EMAIL_FROM || 'noreply@smarttiming.no';
+  const authPass = process.env.SMTP_PASS || process.env.SMTP_APP_PASSWORD;
+  const transport = nodemailer.createTransport({
+    ...provider,
+    auth: authPass ? { user: authUser, pass: authPass } : undefined,
+  });
+  const fromAddr = process.env.EMAIL_FROM || 'Smart Timing <noreply@smarttiming.no>';
+  await transport.sendMail({
+    from: fromAddr,
+    to,
+    subject: `Invitasjon til ${companyName} • Smart Timing`,
+    text: `Du er invitert til å bli med i ${companyName} i Smart Timing. Klikk for å godta invitasjonen: ${link}\n\nLenken utløper om 7 dager.`,
+  });
+}
+
+app.post('/api/company/invites', authenticateCompany, requireCompanyRole('admin'), async (req, res) => {
+  try {
+    const { invited_email, role = 'member' } = req.body || {};
+    if (!invited_email) return res.status(400).json({ error: 'invited_email is required' });
+    const invite = (await pool.query(`INSERT INTO company_invites (company_id, invited_email, role, invited_by) VALUES ($1, $2, $3, $4) RETURNING *`, [req.companyUser.company_id, invited_email.toLowerCase(), role, req.companyUser.user_id])).rows[0];
+    const company = (await pool.query('SELECT name FROM companies WHERE id = $1', [req.companyUser.company_id])).rows[0];
+    const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
+    const link = `${process.env.BACKEND_URL || 'http://localhost:4000'}/api/company/invites/accept?token=${encodeURIComponent(invite.token)}`;
+    await sendInviteEmail(invited_email, link, company?.name || 'Smart Timing');
+    res.json(invite);
+  } catch (e) { res.status(500).json({ error: String(e) }); }
+});
+
+app.post('/api/company/invites/:id/resend', authenticateCompany, requireCompanyRole('admin'), async (req, res) => {
+  try {
+    const inv = (await pool.query('SELECT * FROM company_invites WHERE id = $1 AND company_id = $2', [req.params.id, req.companyUser.company_id])).rows[0];
+    if (!inv) return res.status(404).json({ error: 'Invite not found' });
+    if (inv.used_at) return res.status(400).json({ error: 'Invite already used' });
+    const company = (await pool.query('SELECT name FROM companies WHERE id = $1', [req.companyUser.company_id])).rows[0];
+    const link = `${process.env.BACKEND_URL || 'http://localhost:4000'}/api/company/invites/accept?token=${encodeURIComponent(inv.token)}`;
+    await sendInviteEmail(inv.invited_email, link, company?.name || 'Smart Timing');
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: String(e) }); }
+});
+
+app.delete('/api/company/invites/:id', authenticateCompany, requireCompanyRole('admin'), async (req, res) => {
+  try {
+    await pool.query('DELETE FROM company_invites WHERE id = $1 AND company_id = $2', [req.params.id, req.companyUser.company_id]);
+    res.json({ success: true });
+  } catch (e) { res.status(500).json({ error: String(e) }); }
+});
+
+// Public acceptance endpoint
+app.get('/api/company/invites/accept', async (req, res) => {
+  try {
+    const { token } = req.query;
+    if (!token) return res.status(400).send('Missing token');
+    const inv = (await pool.query('SELECT * FROM company_invites WHERE token = $1', [String(token)])).rows[0];
+    if (!inv) return res.status(404).send('Invalid invite');
+    if (inv.used_at) return res.status(400).send('Invite already used');
+    if (inv.expires_at && new Date(inv.expires_at) < new Date()) return res.status(400).send('Invite expired');
+
+    // Upsert company user
+    await pool.query(`
+      INSERT INTO company_users (company_id, user_email, role, approved)
+      VALUES ($1, LOWER($2), $3, TRUE)
+      ON CONFLICT (company_id, user_email)
+      DO UPDATE SET approved = TRUE, role = EXCLUDED.role, updated_at = NOW()
+    `, [inv.company_id, inv.invited_email, inv.role]);
+
+    // Mark used
+    await pool.query('UPDATE company_invites SET used_at = NOW() WHERE id = $1', [inv.id]);
+
+    const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
+    return res.redirect(`${frontendUrl}/portal?invite=success`);
+  } catch (e) {
+    console.error('Invite accept error:', e);
+    res.status(500).send('Failed to accept invite');
+  }
 });
 
 // ===== ADMIN USER MANAGEMENT ENDPOINTS =====
