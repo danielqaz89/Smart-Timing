@@ -100,6 +100,39 @@ async function initTables(){
   await pool.query(`
     CREATE EXTENSION IF NOT EXISTS "pgcrypto";
     
+    -- Companies table
+    CREATE TABLE IF NOT EXISTS companies (
+      id SERIAL PRIMARY KEY,
+      name TEXT UNIQUE NOT NULL,
+      logo_base64 TEXT,
+      display_order INT DEFAULT 0,
+      created_at TIMESTAMP DEFAULT NOW(),
+      updated_at TIMESTAMP DEFAULT NOW()
+    );
+
+    -- Company users table (link between companies and app users by email)
+    CREATE TABLE IF NOT EXISTS company_users (
+      id SERIAL PRIMARY KEY,
+      company_id INT NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+      user_email TEXT NOT NULL,
+      google_email TEXT,
+      role TEXT CHECK (role IN ('member','admin')) DEFAULT 'member',
+      approved BOOLEAN DEFAULT false,
+      created_at TIMESTAMP DEFAULT NOW(),
+      updated_at TIMESTAMP DEFAULT NOW(),
+      UNIQUE(company_id, user_email)
+    );
+
+    -- User cases table (multiple client IDs per company user)
+    CREATE TABLE IF NOT EXISTS user_cases (
+      id SERIAL PRIMARY KEY,
+      company_user_id INT NOT NULL REFERENCES company_users(id) ON DELETE CASCADE,
+      case_id TEXT NOT NULL,
+      notes TEXT,
+      created_at TIMESTAMP DEFAULT NOW(),
+      UNIQUE(company_user_id, case_id)
+    );
+    
     -- Project info table (enhanced)
     CREATE TABLE IF NOT EXISTS project_info(
       id SERIAL PRIMARY KEY,
@@ -240,6 +273,12 @@ async function initTables(){
   
   // Create indexes (after columns exist)
   await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_companies_name ON companies(name);
+    CREATE INDEX IF NOT EXISTS idx_company_users_company ON company_users(company_id, approved);
+    CREATE INDEX IF NOT EXISTS idx_company_users_email ON company_users(user_email);
+    CREATE INDEX IF NOT EXISTS idx_user_cases_user ON user_cases(company_user_id);
+    CREATE INDEX IF NOT EXISTS idx_user_cases_case ON user_cases(case_id);
+
     CREATE INDEX IF NOT EXISTS idx_log_row_date ON log_row (date DESC, start_time DESC);
     CREATE INDEX IF NOT EXISTS idx_log_row_user ON log_row(user_id, date DESC);
     CREATE INDEX IF NOT EXISTS idx_log_row_stamped ON log_row(user_id, is_stamped_in) WHERE is_stamped_in = true;
@@ -1781,6 +1820,110 @@ app.get("/api/admin/profile", authenticateAdmin, async (req, res) => {
   } catch (e) {
     console.error('Admin profile fetch error:', e);
     res.status(500).json({ error: 'Failed to fetch profile', details: String(e) });
+  }
+});
+
+// ===== COMPANY USER MANAGEMENT (ADMIN) =====
+// GET /api/admin/companies/:companyId/users - List users for a company (with cases)
+app.get("/api/admin/companies/:companyId/users", authenticateAdmin, requireAdminRole('super_admin', 'admin', 'moderator'), async (req, res) => {
+  try {
+    const companyId = Number(req.params.companyId);
+    const users = (await pool.query(`
+      SELECT cu.id, cu.user_email, cu.google_email, cu.role, cu.approved,
+             cu.created_at, cu.updated_at,
+             COALESCE(json_agg(json_build_object('id', uc.id, 'case_id', uc.case_id, 'notes', uc.notes) ORDER BY uc.created_at)
+                      FILTER (WHERE uc.id IS NOT NULL), '[]') AS cases
+      FROM company_users cu
+      LEFT JOIN user_cases uc ON uc.company_user_id = cu.id
+      WHERE cu.company_id = $1
+      GROUP BY cu.id
+      ORDER BY cu.created_at DESC
+    `, [companyId])).rows;
+    res.json({ users });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: String(e) });
+  }
+});
+
+// POST /api/admin/companies/:companyId/users - Add user to company
+app.post("/api/admin/companies/:companyId/users", authenticateAdmin, requireAdminRole('super_admin', 'admin'), async (req, res) => {
+  try {
+    const companyId = Number(req.params.companyId);
+    const { user_email, google_email, role = 'member', approved = false } = req.body || {};
+    if (!user_email) return res.status(400).json({ error: 'user_email is required' });
+    const result = await pool.query(`
+      INSERT INTO company_users (company_id, user_email, google_email, role, approved)
+      VALUES ($1, $2, $3, $4, $5)
+      ON CONFLICT (company_id, user_email)
+      DO UPDATE SET google_email = COALESCE($3, company_users.google_email), role = COALESCE($4, company_users.role), approved = COALESCE($5, company_users.approved), updated_at = NOW()
+      RETURNING *
+    `, [companyId, user_email, google_email || null, role, approved]);
+    res.json(result.rows[0]);
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: String(e) });
+  }
+});
+
+// PATCH /api/admin/companies/:companyId/users/:id - Update user (approve, role, emails)
+app.patch("/api/admin/companies/:companyId/users/:id", authenticateAdmin, requireAdminRole('super_admin', 'admin', 'moderator'), async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { approved, role, google_email } = req.body || {};
+    const updates = [];
+    const vals = [];
+    if (approved !== undefined) { updates.push(`approved = $${updates.length+1}`); vals.push(Boolean(approved)); }
+    if (role !== undefined) { updates.push(`role = $${updates.length+1}`); vals.push(role); }
+    if (google_email !== undefined) { updates.push(`google_email = $${updates.length+1}`); vals.push(google_email); }
+    if (updates.length === 0) return res.status(400).json({ error: 'No fields to update' });
+    vals.push(id);
+    const result = await pool.query(`UPDATE company_users SET ${updates.join(', ')}, updated_at = NOW() WHERE id = $${vals.length} RETURNING *`, vals);
+    res.json(result.rows[0]);
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: String(e) });
+  }
+});
+
+// DELETE /api/admin/companies/:companyId/users/:id - Remove user from company
+app.delete("/api/admin/companies/:companyId/users/:id", authenticateAdmin, requireAdminRole('super_admin'), async (req, res) => {
+  try {
+    await pool.query('DELETE FROM company_users WHERE id = $1', [req.params.id]);
+    res.json({ success: true });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: String(e) });
+  }
+});
+
+// POST /api/admin/companies/:companyId/users/:id/cases - Add case to user
+app.post("/api/admin/companies/:companyId/users/:id/cases", authenticateAdmin, requireAdminRole('super_admin', 'admin', 'moderator'), async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { case_id, notes } = req.body || {};
+    if (!case_id) return res.status(400).json({ error: 'case_id is required' });
+    const result = await pool.query(`
+      INSERT INTO user_cases (company_user_id, case_id, notes)
+      VALUES ($1, $2, $3)
+      ON CONFLICT (company_user_id, case_id) DO NOTHING
+      RETURNING *
+    `, [id, case_id, notes || null]);
+    res.json(result.rows[0] || { ok: true, message: 'Already exists' });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: String(e) });
+  }
+});
+
+// DELETE /api/admin/companies/:companyId/users/:id/cases/:caseId - Remove a case
+app.delete("/api/admin/companies/:companyId/users/:id/cases/:caseId", authenticateAdmin, requireAdminRole('super_admin', 'admin'), async (req, res) => {
+  try {
+    const result = await pool.query('DELETE FROM user_cases WHERE company_user_id = $1 AND id = $2', [req.params.id, req.params.caseId]);
+    res.json({ deleted: result.rowCount });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: String(e) });
   }
 });
 
