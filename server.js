@@ -10,6 +10,7 @@ import { syncToKinoaSheet, isKinoaCompany, getOAuth2Client } from "./lib/googleS
 import { google } from "googleapis";
 import jwt from "jsonwebtoken";
 import bcrypt from "bcrypt";
+import crypto from "crypto";
 import process from "process";
 
 dotenv.config();
@@ -146,7 +147,7 @@ async function initTables(){
       created_at TIMESTAMP DEFAULT NOW()
     );
 
-    -- Company audit log
+    -- Company audit log (advanced)
     CREATE TABLE IF NOT EXISTS company_audit_log (
       id SERIAL PRIMARY KEY,
       company_id INT NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
@@ -155,6 +156,13 @@ async function initTables(){
       target_type TEXT,
       target_id TEXT,
       details JSONB,
+      prev_data JSONB,
+      new_data JSONB,
+      request_id TEXT,
+      ip_address TEXT,
+      user_agent TEXT,
+      prev_hash TEXT,
+      hash TEXT,
       created_at TIMESTAMP DEFAULT NOW()
     );
     
@@ -2053,9 +2061,18 @@ app.get('/api/company/auth/google/callback', async (req, res) => {
   }
 });
 
-async function logCompanyAction(companyId, actorId, action, targetType, targetId, details) {
+async function logCompanyAction(companyId, actorId, action, targetType, targetId, details, req, prevData = null, newData = null) {
   try {
-    await pool.query('INSERT INTO company_audit_log (company_id, actor_company_user_id, action, target_type, target_id, details) VALUES ($1,$2,$3,$4,$5,$6)', [companyId, actorId, action, targetType, targetId, details ? JSON.stringify(details) : null]);
+    const prev = await pool.query('SELECT hash FROM company_audit_log WHERE company_id = $1 ORDER BY id DESC LIMIT 1', [companyId]);
+    const prev_hash = prev.rows[0]?.hash || '';
+    const timestamp = new Date().toISOString();
+    const payload = prev_hash + '|' + timestamp + '|' + String(action) + '|' + String(targetId || '') + '|' + JSON.stringify(details || {});
+    const hash = crypto.createHash('sha256').update(payload).digest('hex');
+    await pool.query(
+      `INSERT INTO company_audit_log (company_id, actor_company_user_id, action, target_type, target_id, details, prev_data, new_data, request_id, ip_address, user_agent, prev_hash, hash, created_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
+      [companyId, actorId || null, action, targetType || null, targetId || null, details ? JSON.stringify(details) : null, prevData ? JSON.stringify(prevData) : null, newData ? JSON.stringify(newData) : null, req?.requestId || null, req?.ip || null, req?.headers?.['user-agent'] || null, prev_hash, hash, timestamp]
+    );
   } catch (e) { console.error('Company audit log error:', e); }
 }
 
@@ -2095,7 +2112,7 @@ app.post('/api/company/users', authenticateCompany, requireCompanyRole('admin'),
       RETURNING *
     `, [req.companyUser.company_id, user_email, google_email || null, role, approved]);
     const row = result.rows[0];
-    await logCompanyAction(req.companyUser.company_id, req.companyUser.user_id, 'company_user_updated', 'company_user', String(row.id), { patch: req.body });
+    await logCompanyAction(req.companyUser.company_id, req.companyUser.user_id, 'company_user_added', 'company_user', String(row.id), { user_email, role, approved }, req, null, row);
     res.json(row);
 ;
     await logCompanyAction(req.companyUser.company_id, req.companyUser.user_id, 'company_user_added', 'company_user', String(row.id), { user_email, role, approved });
@@ -2107,6 +2124,7 @@ app.patch('/api/company/users/:id', authenticateCompany, requireCompanyRole('adm
   try {
     const { id } = req.params;
     const { approved, role, google_email } = req.body || {};
+    const before = (await pool.query('SELECT * FROM company_users WHERE id = $1 AND company_id = $2', [id, req.companyUser.company_id])).rows[0];
     const updates = [];
     const vals = [];
     if (approved !== undefined) { updates.push(`approved = $${updates.length+1}`); vals.push(Boolean(approved)); }
@@ -2115,14 +2133,15 @@ app.patch('/api/company/users/:id', authenticateCompany, requireCompanyRole('adm
     if (!updates.length) return res.status(400).json({ error: 'No fields to update' });
     vals.push(id, req.companyUser.company_id);
     const result = await pool.query(`UPDATE company_users SET ${updates.join(', ')}, updated_at = NOW() WHERE id = $${vals.length-1} AND company_id = $${vals.length} RETURNING *`, vals);
-    res.json(result.rows[0]);
-  } catch (e) { res.status(500).json({ error: String(e) }); }
-});
+    const row = result.rows[0];
+    await logCompanyAction(req.companyUser.company_id, req.companyUser.user_id, 'company_user_updated', 'company_user', String(row.id), { patch: req.body }, req, before, row);
+    res.json(row);
 
 app.delete('/api/company/users/:id', authenticateCompany, requireCompanyRole('admin'), async (req, res) => {
   try {
+    const before = (await pool.query('SELECT * FROM company_users WHERE id = $1 AND company_id = $2', [req.params.id, req.companyUser.company_id])).rows[0];
     await pool.query('DELETE FROM company_users WHERE id = $1 AND company_id = $2', [req.params.id, req.companyUser.company_id]);
-    await logCompanyAction(req.companyUser.company_id, req.companyUser.user_id, 'company_user_deleted', 'company_user', String(req.params.id), null);
+    await logCompanyAction(req.companyUser.company_id, req.companyUser.user_id, 'company_user_deleted', 'company_user', String(req.params.id), null, req, before, null);
     res.json({ success: true });
   } catch (e) { res.status(500).json({ error: String(e) }); }
 });
@@ -2133,15 +2152,16 @@ app.post('/api/company/users/:id/cases', authenticateCompany, requireCompanyRole
     if (!case_id) return res.status(400).json({ error: 'case_id is required' });
     const result = await pool.query('INSERT INTO user_cases (company_user_id, case_id, notes) VALUES ($1, $2, $3) ON CONFLICT (company_user_id, case_id) DO NOTHING RETURNING *', [req.params.id, case_id, notes || null]);
     const row = result.rows[0];
-    await logCompanyAction(req.companyUser.company_id, req.companyUser.user_id, 'user_case_added', 'company_user_case', String(req.params.id), { case_id });
+    await logCompanyAction(req.companyUser.company_id, req.companyUser.user_id, 'user_case_added', 'company_user_case', String(req.params.id), { case_id }, req, null, row);
     res.json(row || { ok: true });
   } catch (e) { res.status(500).json({ error: String(e) }); }
 });
 
 app.delete('/api/company/users/:id/cases/:caseId', authenticateCompany, requireCompanyRole('admin','case_manager'), async (req, res) => {
   try {
+    const before = (await pool.query('SELECT * FROM user_cases WHERE company_user_id = $1 AND id = $2', [req.params.id, req.params.caseId])).rows[0];
     const result = await pool.query('DELETE FROM user_cases WHERE company_user_id = $1 AND id = $2', [req.params.id, req.params.caseId]);
-    await logCompanyAction(req.companyUser.company_id, req.companyUser.user_id, 'user_case_deleted', 'company_user_case', String(req.params.id), { case_row_id: req.params.caseId });
+    await logCompanyAction(req.companyUser.company_id, req.companyUser.user_id, 'user_case_deleted', 'company_user_case', String(req.params.id), { case_row_id: req.params.caseId }, req, before, null);
     res.json({ deleted: result.rowCount });
   } catch (e) { res.status(500).json({ error: String(e) }); }
 });
@@ -2184,7 +2204,7 @@ app.post('/api/company/invites', authenticateCompany, requireCompanyRole('admin'
     const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
     const link = `${process.env.BACKEND_URL || 'http://localhost:4000'}/api/company/invites/accept?token=${encodeURIComponent(invite.token)}`;
     await sendInviteEmail(invited_email, link, company?.name || 'Smart Timing');
-    await logCompanyAction(req.companyUser.company_id, req.companyUser.user_id, 'invite_created', 'company_invite', String(invite.id), { invited_email, role });
+    await logCompanyAction(req.companyUser.company_id, req.companyUser.user_id, 'invite_created', 'company_invite', String(invite.id), { invited_email, role }, req, null, invite);
     res.json(invite);
   } catch (e) { res.status(500).json({ error: String(e) }); }
 });
@@ -2197,15 +2217,16 @@ app.post('/api/company/invites/:id/resend', authenticateCompany, requireCompanyR
     const company = (await pool.query('SELECT name FROM companies WHERE id = $1', [req.companyUser.company_id])).rows[0];
     const link = `${process.env.BACKEND_URL || 'http://localhost:4000'}/api/company/invites/accept?token=${encodeURIComponent(inv.token)}`;
     await sendInviteEmail(inv.invited_email, link, company?.name || 'Smart Timing');
-    await logCompanyAction(req.companyUser.company_id, req.companyUser.user_id, 'invite_resent', 'company_invite', String(inv.id), null);
+    await logCompanyAction(req.companyUser.company_id, req.companyUser.user_id, 'invite_resent', 'company_invite', String(inv.id), null, req, inv, inv);
     res.json({ ok: true });
   } catch (e) { res.status(500).json({ error: String(e) }); }
 });
 
 app.delete('/api/company/invites/:id', authenticateCompany, requireCompanyRole('admin'), async (req, res) => {
   try {
+    const before = (await pool.query('SELECT * FROM company_invites WHERE id = $1 AND company_id = $2', [req.params.id, req.companyUser.company_id])).rows[0];
     await pool.query('DELETE FROM company_invites WHERE id = $1 AND company_id = $2', [req.params.id, req.companyUser.company_id]);
-    await logCompanyAction(req.companyUser.company_id, req.companyUser.user_id, 'invite_deleted', 'company_invite', String(req.params.id), null);
+    await logCompanyAction(req.companyUser.company_id, req.companyUser.user_id, 'invite_deleted', 'company_invite', String(req.params.id), null, req, before, null);
     res.json({ success: true });
   } catch (e) { res.status(500).json({ error: String(e) }); }
 });
@@ -2217,8 +2238,9 @@ app.put('/api/company/logo', authenticateCompany, requireCompanyRole('admin'), a
     if (!logo_base64) return res.status(400).json({ error: 'logo_base64 is required' });
     // Optional: size guard (rough)
     if (logo_base64.length > 2_000_000) return res.status(400).json({ error: 'Logo too large' });
+    const before = (await pool.query('SELECT logo_base64 FROM companies WHERE id = $1', [req.companyUser.company_id])).rows[0];
     await pool.query('UPDATE companies SET logo_base64 = $1, updated_at = NOW() WHERE id = $2', [logo_base64, req.companyUser.company_id]);
-    await logCompanyAction(req.companyUser.company_id, req.companyUser.user_id, 'company_logo_updated', 'company', String(req.companyUser.company_id), null);
+    await logCompanyAction(req.companyUser.company_id, req.companyUser.user_id, 'company_logo_updated', 'company', String(req.companyUser.company_id), null, req, before, { logo_base64: '[updated]' });
     res.json({ ok: true });
   } catch (e) { res.status(500).json({ error: String(e) }); }
 });
@@ -2226,7 +2248,39 @@ app.put('/api/company/logo', authenticateCompany, requireCompanyRole('admin'), a
 // List audit log (admin)
 app.get('/api/company/audit', authenticateCompany, requireCompanyRole('admin'), async (req, res) => {
   try {
-    const rows = (await pool.query('SELECT * FROM company_audit_log WHERE company_id = $1 ORDER BY created_at DESC LIMIT 100', [req.companyUser.company_id])).rows;
+    const { action, actor, q, from, to, limit = 100, offset = 0 } = req.query;
+    const params = [req.companyUser.company_id];
+    let where = 'WHERE cal.company_id = $1';
+    if (action) { params.push(String(action)); where += ` AND cal.action = $${params.length}`; }
+    if (actor) { params.push(String(actor).toLowerCase()); where += ` AND LOWER(cu.user_email) = $${params.length}`; }
+    if (from) { params.push(new Date(String(from))); where += ` AND cal.created_at >= $${params.length}`; }
+    if (to) { params.push(new Date(String(to))); where += ` AND cal.created_at <= $${params.length}`; }
+    if (q) { params.push(`%${String(q).toLowerCase()}%`); where += ` AND (LOWER(cal.target_type) LIKE $${params.length} OR LOWER(cal.target_id) LIKE $${params.length} OR LOWER(cal.action) LIKE $${params.length})`; }
+    params.push(Number(limit), Number(offset));
+    const sql = `
+      SELECT cal.*, cu.user_email as actor_email
+      FROM company_audit_log cal
+      LEFT JOIN company_users cu ON cu.id = cal.actor_company_user_id
+      ${where}
+      ORDER BY cal.created_at DESC
+      LIMIT $${params.length-1} OFFSET $${params.length}
+    `;
+    const rows = (await pool.query(sql, params)).rows;
+    res.json({ logs: rows });
+  } catch (e) { res.status(500).json({ error: String(e) }); }
+});
+
+app.get('/api/company/audit/export', authenticateCompany, requireCompanyRole('admin'), async (req, res) => {
+  try {
+    const format = String(req.query.format || 'json').toLowerCase();
+    const rows = (await pool.query('SELECT cal.created_at, cal.action, cal.target_type, cal.target_id, cu.user_email as actor_email, cal.details FROM company_audit_log cal LEFT JOIN company_users cu ON cu.id = cal.actor_company_user_id WHERE cal.company_id = $1 ORDER BY cal.created_at DESC LIMIT 1000', [req.companyUser.company_id])).rows;
+    if (format === 'csv') {
+      const header = 'created_at,action,target_type,target_id,actor_email,details\n';
+      const body = rows.map(r => [r.created_at, r.action, r.target_type || '', r.target_id || '', r.actor_email || '', JSON.stringify(r.details || {})].map(v => `"${String(v).replace(/"/g,'""')}"`).join(',')).join('\n');
+      res.setHeader('Content-Type','text/csv');
+      res.setHeader('Content-Disposition','attachment; filename="company_audit.csv"');
+      return res.send(header + body);
+    }
     res.json({ logs: rows });
   } catch (e) { res.status(500).json({ error: String(e) }); }
 });
@@ -2251,8 +2305,8 @@ app.get('/api/company/invites/accept', async (req, res) => {
 
     // Mark used
     await pool.query('UPDATE company_invites SET used_at = NOW() WHERE id = $1', [inv.id]);
-    await logCompanyAction(inv.company_id, null, 'invite_accepted', 'company_invite', String(inv.id), { invited_email: inv.invited_email });
-
+    await logCompanyAction(inv.company_id, null, 'invite_accepted', 'company_invite', String(inv.id), { invited_email: inv.invited_email }, null, inv, inv);
+    
     const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
     return res.redirect(`${frontendUrl}/portal?invite=success`);
   } catch (e) {
