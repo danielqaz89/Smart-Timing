@@ -292,6 +292,24 @@ async function initTables(){
       updated_at TIMESTAMPTZ DEFAULT NOW()
     );
   `);
+
+  // CMS themes table
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS cms_themes (
+      id TEXT PRIMARY KEY,
+      theme JSONB NOT NULL DEFAULT '{}'::jsonb,
+      updated_at TIMESTAMPTZ DEFAULT NOW()
+    );
+  `);
+
+  // CMS pages table
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS cms_pages (
+      id TEXT PRIMARY KEY,
+      content JSONB NOT NULL DEFAULT '{}'::jsonb,
+      updated_at TIMESTAMPTZ DEFAULT NOW()
+    );
+  `);
   
   // Alter existing tables (safe, only adds if not exists) - run separately
   await pool.query(`
@@ -1916,6 +1934,66 @@ app.put('/api/admin/cms/translations', authenticateAdmin, requireAdminRole('admi
   } catch (e) {
     console.error('PUT cms_translations failed', e);
     res.status(500).json({ error: 'Failed to save translations' });
+  }
+});
+
+// ===== CMS THEME =====
+// Public GET for global theme
+app.get('/api/admin/cms/themes/global', async (req, res) => {
+  try {
+    const r = await pool.query('SELECT theme FROM cms_themes WHERE id=$1', ['global']);
+    res.json(r.rows[0]?.theme || {});
+  } catch (e) {
+    console.error('GET cms_theme failed', e);
+    res.status(500).json({ error: 'Failed to load theme' });
+  }
+});
+
+// Protected PUT to update global theme
+app.put('/api/admin/cms/themes/global', authenticateAdmin, requireAdminRole('admin','super_admin'), async (req, res) => {
+  try {
+    const theme = req.body && (req.body.theme || req.body) || {};
+    await pool.query(`
+      INSERT INTO cms_themes (id, theme, updated_at)
+      VALUES ($1, $2, NOW())
+      ON CONFLICT (id) DO UPDATE SET theme = EXCLUDED.theme, updated_at = NOW()
+    `, ['global', theme]);
+    try { await logAdminAction(req.adminUser.id, 'cms_theme_updated', 'cms_theme', 'global', null, req.ip); } catch {}
+    res.json({ ok: true });
+  } catch (e) {
+    console.error('PUT cms_theme failed', e);
+    res.status(500).json({ error: 'Failed to save theme' });
+  }
+});
+
+// ===== CMS PAGES =====
+// Public GET page content by id
+app.get('/api/admin/cms/pages/:pageId', async (req, res) => {
+  try {
+    const pageId = req.params.pageId;
+    const r = await pool.query('SELECT content FROM cms_pages WHERE id=$1', [pageId]);
+    res.json(r.rows[0]?.content || {});
+  } catch (e) {
+    console.error('GET cms_page failed', e);
+    res.status(500).json({ error: 'Failed to load page' });
+  }
+});
+
+// Protected PUT page content by id
+app.put('/api/admin/cms/pages/:pageId', authenticateAdmin, requireAdminRole('admin','super_admin'), async (req, res) => {
+  try {
+    const pageId = req.params.pageId;
+    const content = req.body && (req.body.content || req.body) || {};
+    await pool.query(`
+      INSERT INTO cms_pages (id, content, updated_at)
+      VALUES ($1, $2, NOW())
+      ON CONFLICT (id) DO UPDATE SET content = EXCLUDED.content, updated_at = NOW()
+    `, [pageId, content]);
+    try { await logAdminAction(req.adminUser.id, 'cms_page_updated', 'cms_page', pageId, null, req.ip); } catch {}
+    res.json({ ok: true });
+  } catch (e) {
+    console.error('PUT cms_page failed', e);
+    res.status(500).json({ error: 'Failed to save page' });
   }
 });
 
