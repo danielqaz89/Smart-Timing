@@ -284,6 +284,15 @@ async function initTables(){
     );
   `);
   
+  // CMS translations table
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS cms_translations (
+      id TEXT PRIMARY KEY,
+      translations JSONB NOT NULL DEFAULT '{}'::jsonb,
+      updated_at TIMESTAMPTZ DEFAULT NOW()
+    );
+  `);
+  
   // Alter existing tables (safe, only adds if not exists) - run separately
   await pool.query(`
     -- Relax/extend role constraints to include case_manager
@@ -1877,6 +1886,39 @@ app.get("/api/admin/profile", authenticateAdmin, async (req, res) => {
   }
 });
 
+// ===== CMS TRANSLATIONS (Admin) =====
+// Public GET for frontend translation context
+app.get('/api/admin/cms/translations', async (req, res) => {
+  try {
+    const r = await pool.query('SELECT translations FROM cms_translations WHERE id=$1', ['global']);
+    const data = r.rows[0]?.translations || {};
+    // Return raw map for client consumption
+    res.json(data);
+  } catch (e) {
+    console.error('GET cms_translations failed', e);
+    res.status(500).json({ error: 'Failed to load translations' });
+  }
+});
+
+// Protected PUT to update all translations
+app.put('/api/admin/cms/translations', authenticateAdmin, requireAdminRole('admin','super_admin'), async (req, res) => {
+  try {
+    const payload = (req.body && req.body.translations) ? req.body.translations : (req.body || {});
+    await pool.query(`
+      INSERT INTO cms_translations (id, translations, updated_at)
+      VALUES ($1, $2, NOW())
+      ON CONFLICT (id) DO UPDATE SET translations = EXCLUDED.translations, updated_at = NOW()
+    `, ['global', payload]);
+
+    try { await logAdminAction(req.adminUser.id, 'cms_translations_updated', 'cms_translations', 'global', { keys: Object.keys(payload || {}).length }, req.ip); } catch {}
+
+    res.json({ ok: true });
+  } catch (e) {
+    console.error('PUT cms_translations failed', e);
+    res.status(500).json({ error: 'Failed to save translations' });
+  }
+});
+
 // ===== COMPANY USER MANAGEMENT (ADMIN) =====
 // GET /api/admin/companies/:companyId/users - List users for a company (with cases)
 app.get("/api/admin/companies/:companyId/users", authenticateAdmin, requireAdminRole('super_admin', 'admin', 'moderator'), async (req, res) => {
@@ -2114,9 +2156,6 @@ app.post('/api/company/users', authenticateCompany, requireCompanyRole('admin'),
     const row = result.rows[0];
     await logCompanyAction(req.companyUser.company_id, req.companyUser.user_id, 'company_user_added', 'company_user', String(row.id), { user_email, role, approved }, req, null, row);
     res.json(row);
-;
-    await logCompanyAction(req.companyUser.company_id, req.companyUser.user_id, 'company_user_added', 'company_user', String(row.id), { user_email, role, approved });
-    res.json(row);
   } catch (e) { res.status(500).json({ error: String(e) }); }
 });
 
@@ -2136,6 +2175,8 @@ app.patch('/api/company/users/:id', authenticateCompany, requireCompanyRole('adm
     const row = result.rows[0];
     await logCompanyAction(req.companyUser.company_id, req.companyUser.user_id, 'company_user_updated', 'company_user', String(row.id), { patch: req.body }, req, before, row);
     res.json(row);
+  } catch (e) { res.status(500).json({ error: String(e) }); }
+});
 
 app.delete('/api/company/users/:id', authenticateCompany, requireCompanyRole('admin'), async (req, res) => {
   try {
