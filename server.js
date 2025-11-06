@@ -310,6 +310,22 @@ async function initTables(){
       updated_at TIMESTAMPTZ DEFAULT NOW()
     );
   `);
+
+  // CMS contact submissions table (stores contact form entries)
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS cms_contact_submissions (
+      id SERIAL PRIMARY KEY,
+      page_id TEXT NOT NULL,
+      form_id TEXT NOT NULL,
+      fields JSONB NOT NULL DEFAULT '{}'::jsonb,
+      ip_address TEXT,
+      user_agent TEXT,
+      status TEXT CHECK (status IN ('new','processed','error')) DEFAULT 'new',
+      error_message TEXT,
+      created_at TIMESTAMP DEFAULT NOW(),
+      updated_at TIMESTAMP DEFAULT NOW()
+    );
+  `);
   
   // Alter existing tables (safe, only adds if not exists) - run separately
   await pool.query(`
@@ -1994,6 +2010,159 @@ app.put('/api/admin/cms/pages/:pageId', authenticateAdmin, requireAdminRole('adm
   } catch (e) {
     console.error('PUT cms_page failed', e);
     res.status(500).json({ error: 'Failed to save page' });
+  }
+});
+
+// ===== CMS CONTACT FORM SUBMISSIONS =====
+// Public endpoint to submit contact form defined in CMS page sections (type: 'form')
+app.post('/api/cms/contact/submit', async (req, res) => {
+  try {
+    const body = req.body || {};
+    const page_id = typeof body.page_id === 'string' ? body.page_id : 'landing';
+    const form_id = typeof body.form_id === 'string' ? body.form_id : 'contact_form';
+    const values = (body.values && typeof body.values === 'object') ? body.values : {};
+
+    // Load form definition from CMS page
+    const pageRow = await pool.query('SELECT content FROM cms_pages WHERE id = $1', [page_id]);
+    const content = pageRow.rows[0]?.content || {};
+    const sections = Array.isArray(content.sections) ? content.sections : [];
+    const formSection = sections.find((s) => (s?.id === form_id) && (s?.type === 'form'))
+      || sections.find((s) => s?.type === 'form');
+
+    if (!formSection || !Array.isArray(formSection?.content?.fields)) {
+      return res.status(400).json({ error: 'Form not configured' });
+    }
+
+    const fieldsDef = formSection.content.fields;
+    const errors = [];
+    const clean = {};
+
+    for (const f of fieldsDef) {
+      const name = String(f?.name || '').trim();
+      if (!name) continue;
+      const type = String(f?.type || 'text');
+      const required = Boolean(f?.required);
+      let v = values[name];
+
+      if (type === 'checkbox') {
+        v = Boolean(v);
+        if (required && v !== true) errors.push(`${name} required`);
+      } else if (type === 'email') {
+        if (v == null || typeof v !== 'string' || v.trim() === '') {
+          if (required) errors.push(`${name} required`);
+        } else {
+          v = String(v).trim();
+          const re = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
+          if (!re.test(v)) errors.push(`${name} invalid`);
+        }
+      } else {
+        if (v == null || typeof v !== 'string' || v.trim() === '') {
+          if (required) errors.push(`${name} required`);
+        } else {
+          v = String(v).trim();
+        }
+      }
+      if (v !== undefined) clean[name] = v;
+    }
+
+    if (errors.length) {
+      return res.status(400).json({ error: 'Validation failed', details: errors });
+    }
+
+    // Basic honeypot (optional hidden field)
+    if (values.hp) {
+      return res.json({ ok: true, skipped: true });
+    }
+
+    const ip = req.ip || null;
+    const ua = req.headers?.['user-agent'] || null;
+
+    const insert = await pool.query(`
+      INSERT INTO cms_contact_submissions (page_id, form_id, fields, ip_address, user_agent)
+      VALUES ($1, $2, $3, $4, $5)
+      RETURNING id, created_at
+    `, [page_id, form_id, clean, ip, ua]);
+
+    const submissionId = insert.rows[0].id;
+    let webhook = 'skipped';
+
+    if (process.env.CONTACT_WEBHOOK_URL) {
+      try {
+        const resp = await fetch(process.env.CONTACT_WEBHOOK_URL, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            submission_id: submissionId,
+            page_id,
+            form_id,
+            fields: clean,
+            ip_address: ip,
+            user_agent: ua,
+            created_at: insert.rows[0].created_at,
+          }),
+        });
+        webhook = resp.ok ? 'success' : `error:${resp.status}`;
+        await pool.query(
+          'UPDATE cms_contact_submissions SET status = $1, updated_at = NOW(), error_message = $2 WHERE id = $3',
+          [resp.ok ? 'processed' : 'error', resp.ok ? null : `Webhook HTTP ${resp.status}`, submissionId]
+        );
+        await pool.query(
+          `INSERT INTO sync_log (user_id, sync_type, status, row_count, error_message) VALUES ($1, 'webhook_send', $2, $3, $4)`,
+          ['default', resp.ok ? 'success' : 'error', 1, resp.ok ? null : `HTTP ${resp.status}`]
+        );
+      } catch (e) {
+        webhook = 'error';
+        await pool.query(
+          'UPDATE cms_contact_submissions SET status = $1, updated_at = NOW(), error_message = $2 WHERE id = $3',
+          ['error', String(e), submissionId]
+        );
+        await pool.query(
+          `INSERT INTO sync_log (user_id, sync_type, status, row_count, error_message) VALUES ($1, 'webhook_send', 'error', $2, $3)`,
+          ['default', 0, String(e)]
+        );
+      }
+    }
+
+    res.json({ ok: true, submission_id: submissionId, webhook });
+  } catch (e) {
+    console.error('Contact submit error:', e);
+    res.status(500).json({ error: 'Failed to submit form' });
+  }
+});
+
+// Admin: list contact submissions
+app.get('/api/admin/cms/contact/submissions', authenticateAdmin, requireAdminRole('admin','super_admin'), async (req, res) => {
+  try {
+    const { page_id, status, limit } = req.query || {};
+    const clauses = [];
+    const vals = [];
+    if (page_id) { vals.push(String(page_id)); clauses.push(`page_id = $${vals.length}`); }
+    if (status) { vals.push(String(status)); clauses.push(`status = $${vals.length}`); }
+    const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
+    const lim = Math.min(parseInt(limit || '50', 10) || 50, 200);
+    const rows = (await pool.query(`SELECT * FROM cms_contact_submissions ${where} ORDER BY created_at DESC LIMIT ${lim}`, vals)).rows;
+    res.json({ submissions: rows });
+  } catch (e) {
+    console.error('List submissions error:', e);
+    res.status(500).json({ error: 'Failed to list submissions' });
+  }
+});
+
+// Admin: update submission status
+app.patch('/api/admin/cms/contact/submissions/:id', authenticateAdmin, requireAdminRole('admin','super_admin'), async (req, res) => {
+  try {
+    const { status, error_message } = req.body || {};
+    if (!['new','processed','error'].includes(status)) {
+      return res.status(400).json({ error: 'Invalid status' });
+    }
+    const r = await pool.query(
+      'UPDATE cms_contact_submissions SET status = $1, error_message = COALESCE($2, error_message), updated_at = NOW() WHERE id = $3 RETURNING *',
+      [status, error_message || null, req.params.id]
+    );
+    res.json(r.rows[0] || null);
+  } catch (e) {
+    console.error('Update submission error:', e);
+    res.status(500).json({ error: 'Failed to update submission' });
   }
 });
 

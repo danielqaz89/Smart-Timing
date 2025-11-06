@@ -223,6 +223,26 @@ export type ProjectInfo = {
 export type { BrregCompany } from './brreg';
 export { searchBrregCompany, getBrregCompanyByOrgnr, KINOA_TILTAK_AS } from './brreg';
 
+// ===== CMS PAGES/THEME =====
+export async function fetchCmsPage(pageId: string): Promise<any> {
+  const res = await fetch(`${API_BASE}/api/admin/cms/pages/${encodeURIComponent(pageId)}`, { cache: 'no-store' });
+  if (!res.ok) throw new Error('Failed to load CMS page');
+  return res.json();
+}
+
+export async function submitContactForm(opts: { page_id?: string; form_id?: string; values: Record<string, any> }) {
+  const res = await fetch(`${API_BASE}/api/cms/contact/submit`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(opts),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: 'Failed to submit form' }));
+    throw new Error(err.error || 'Failed to submit form');
+  }
+  return res.json();
+}
+
 export async function fetchProjectInfo(userId = 'default'): Promise<ProjectInfo | null> {
   const res = await fetch(`${API_BASE}/api/project-info?user_id=${userId}`, { cache: 'no-store' });
   if (!res.ok) throw new Error('Failed to load project info');
