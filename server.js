@@ -398,7 +398,7 @@ async function initTables(){
     CREATE TABLE IF NOT EXISTS company_document_templates (
       id SERIAL PRIMARY KEY,
       company_id INT NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
-      template_type TEXT CHECK (template_type IN ('timesheet','report')) NOT NULL,
+      template_type TEXT CHECK (template_type IN ('timesheet','report','case_report')) NOT NULL,
       engine TEXT DEFAULT 'html',
       template_html TEXT NOT NULL,
       template_css TEXT,
@@ -406,6 +406,31 @@ async function initTables(){
       created_at TIMESTAMP DEFAULT NOW(),
       updated_at TIMESTAMP DEFAULT NOW(),
       UNIQUE(company_id, template_type)
+    );
+
+    -- Case Reports table (for user-written monthly case reports)
+    CREATE TABLE IF NOT EXISTS case_reports (
+      id SERIAL PRIMARY KEY,
+      user_cases_id INT NOT NULL REFERENCES user_cases(id) ON DELETE CASCADE,
+      company_user_id INT NOT NULL REFERENCES company_users(id) ON DELETE CASCADE,
+      case_id TEXT NOT NULL,
+      month TEXT NOT NULL CHECK (month ~ '^[0-9]{4}-(0[1-9]|1[0-2])$'),
+      background TEXT,
+      actions TEXT,
+      progress TEXT,
+      challenges TEXT,
+      factors TEXT,
+      assessment TEXT,
+      recommendations TEXT,
+      notes TEXT,
+      status TEXT CHECK (status IN ('draft','submitted','approved','rejected')) DEFAULT 'draft',
+      submitted_at TIMESTAMP,
+      approved_by INT REFERENCES company_users(id),
+      approved_at TIMESTAMP,
+      rejection_reason TEXT,
+      created_at TIMESTAMP DEFAULT NOW(),
+      updated_at TIMESTAMP DEFAULT NOW(),
+      UNIQUE(user_cases_id, month)
     );
 
   `);
@@ -524,6 +549,10 @@ async function initTables(){
     CREATE INDEX IF NOT EXISTS idx_company_invites_company ON company_invites(company_id, invited_email);
     CREATE INDEX IF NOT EXISTS idx_company_invites_token ON company_invites(token);
     CREATE INDEX IF NOT EXISTS idx_company_audit_company_time ON company_audit_log(company_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_case_reports_user_cases ON case_reports(user_cases_id, month DESC);
+    CREATE INDEX IF NOT EXISTS idx_case_reports_company_user ON case_reports(company_user_id, status, month DESC);
+    CREATE INDEX IF NOT EXISTS idx_case_reports_case_month ON case_reports(case_id, month);
+    CREATE INDEX IF NOT EXISTS idx_case_reports_status ON case_reports(status, submitted_at DESC);
 
     CREATE INDEX IF NOT EXISTS idx_log_row_date ON log_row (date DESC, start_time DESC);
     CREATE INDEX IF NOT EXISTS idx_log_row_user ON log_row(user_id, date DESC);
@@ -2861,6 +2890,189 @@ app.get('/api/company/audit/export', authenticateCompany, requireCompanyRole('ad
       return res.send(header + body);
     }
     res.json({ logs: rows });
+  } catch (e) { res.status(500).json({ error: String(e) }); }
+});
+
+// ===== CASE REPORTS ENDPOINTS =====
+// User endpoints - manage their own case reports
+app.get('/api/case-reports', authenticateCompany, async (req, res) => {
+  try {
+    const { case_id, month, status } = req.query || {};
+    const params = [req.companyUser.user_id];
+    let where = 'WHERE cr.company_user_id = $1';
+    if (case_id) { params.push(String(case_id)); where += ` AND cr.case_id = $${params.length}`; }
+    if (month) { params.push(String(month)); where += ` AND cr.month = $${params.length}`; }
+    if (status) { params.push(String(status)); where += ` AND cr.status = $${params.length}`; }
+    const sql = `
+      SELECT cr.*, uc.case_id as case_name
+      FROM case_reports cr
+      JOIN user_cases uc ON uc.id = cr.user_cases_id
+      ${where}
+      ORDER BY cr.month DESC, cr.created_at DESC
+    `;
+    const rows = (await pool.query(sql, params)).rows;
+    res.json({ reports: rows });
+  } catch (e) { res.status(500).json({ error: String(e) }); }
+});
+
+app.get('/api/case-reports/:id', authenticateCompany, async (req, res) => {
+  try {
+    const report = (await pool.query('SELECT * FROM case_reports WHERE id = $1 AND company_user_id = $2', [req.params.id, req.companyUser.user_id])).rows[0];
+    if (!report) return res.status(404).json({ error: 'Report not found' });
+    res.json(report);
+  } catch (e) { res.status(500).json({ error: String(e) }); }
+});
+
+app.post('/api/case-reports', authenticateCompany, async (req, res) => {
+  try {
+    const { user_cases_id, case_id, month, background, actions, progress, challenges, factors, assessment, recommendations, notes } = req.body || {};
+    if (!user_cases_id || !case_id || !month) return res.status(400).json({ error: 'user_cases_id, case_id, and month are required' });
+    // Validate month format YYYY-MM
+    if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(String(month))) return res.status(400).json({ error: 'month must be YYYY-MM format' });
+    // Verify user owns this case
+    const userCase = (await pool.query('SELECT * FROM user_cases WHERE id = $1 AND company_user_id = $2', [user_cases_id, req.companyUser.user_id])).rows[0];
+    if (!userCase) return res.status(403).json({ error: 'You do not have access to this case' });
+    const result = await pool.query(`
+      INSERT INTO case_reports (user_cases_id, company_user_id, case_id, month, background, actions, progress, challenges, factors, assessment, recommendations, notes, status)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, 'draft')
+      RETURNING *
+    `, [user_cases_id, req.companyUser.user_id, case_id, month, background, actions, progress, challenges, factors, assessment, recommendations, notes]);
+    res.json(result.rows[0]);
+  } catch (e) { res.status(500).json({ error: String(e) }); }
+});
+
+app.put('/api/case-reports/:id', authenticateCompany, async (req, res) => {
+  try {
+    const { background, actions, progress, challenges, factors, assessment, recommendations, notes, status } = req.body || {};
+    const existing = (await pool.query('SELECT * FROM case_reports WHERE id = $1 AND company_user_id = $2', [req.params.id, req.companyUser.user_id])).rows[0];
+    if (!existing) return res.status(404).json({ error: 'Report not found' });
+    // Only allow editing if draft or rejected
+    if (existing.status !== 'draft' && existing.status !== 'rejected') {
+      return res.status(403).json({ error: 'Cannot edit submitted or approved reports' });
+    }
+    const updates = [];
+    const vals = [];
+    if (background !== undefined) { updates.push(`background = $${updates.length+1}`); vals.push(background); }
+    if (actions !== undefined) { updates.push(`actions = $${updates.length+1}`); vals.push(actions); }
+    if (progress !== undefined) { updates.push(`progress = $${updates.length+1}`); vals.push(progress); }
+    if (challenges !== undefined) { updates.push(`challenges = $${updates.length+1}`); vals.push(challenges); }
+    if (factors !== undefined) { updates.push(`factors = $${updates.length+1}`); vals.push(factors); }
+    if (assessment !== undefined) { updates.push(`assessment = $${updates.length+1}`); vals.push(assessment); }
+    if (recommendations !== undefined) { updates.push(`recommendations = $${updates.length+1}`); vals.push(recommendations); }
+    if (notes !== undefined) { updates.push(`notes = $${updates.length+1}`); vals.push(notes); }
+    if (status !== undefined) { updates.push(`status = $${updates.length+1}`); vals.push(status); }
+    if (!updates.length) return res.status(400).json({ error: 'No fields to update' });
+    // Handle submission timestamp
+    if (status === 'submitted' && existing.status !== 'submitted') {
+      updates.push(`submitted_at = NOW()`);
+    }
+    vals.push(req.params.id, req.companyUser.user_id);
+    const result = await pool.query(`
+      UPDATE case_reports SET ${updates.join(', ')}, updated_at = NOW()
+      WHERE id = $${vals.length-1} AND company_user_id = $${vals.length}
+      RETURNING *
+    `, vals);
+    res.json(result.rows[0]);
+  } catch (e) { res.status(500).json({ error: String(e) }); }
+});
+
+app.delete('/api/case-reports/:id', authenticateCompany, async (req, res) => {
+  try {
+    const existing = (await pool.query('SELECT * FROM case_reports WHERE id = $1 AND company_user_id = $2', [req.params.id, req.companyUser.user_id])).rows[0];
+    if (!existing) return res.status(404).json({ error: 'Report not found' });
+    // Only allow deletion if draft
+    if (existing.status !== 'draft') {
+      return res.status(403).json({ error: 'Cannot delete submitted or approved reports' });
+    }
+    await pool.query('DELETE FROM case_reports WHERE id = $1 AND company_user_id = $2', [req.params.id, req.companyUser.user_id]);
+    res.json({ success: true });
+  } catch (e) { res.status(500).json({ error: String(e) }); }
+});
+
+// Company admin endpoints - view and approve reports
+app.get('/api/company/case-reports', authenticateCompany, requireCompanyRole('admin','case_manager'), async (req, res) => {
+  try {
+    const { case_id, month, status, user_id, limit = 100, offset = 0 } = req.query || {};
+    const params = [req.companyUser.company_id];
+    let where = 'WHERE cu.company_id = $1';
+    if (case_id) { params.push(String(case_id)); where += ` AND cr.case_id = $${params.length}`; }
+    if (month) { params.push(String(month)); where += ` AND cr.month = $${params.length}`; }
+    if (status) { params.push(String(status)); where += ` AND cr.status = $${params.length}`; }
+    if (user_id) { params.push(Number(user_id)); where += ` AND cr.company_user_id = $${params.length}`; }
+    params.push(Number(limit), Number(offset));
+    const sql = `
+      SELECT cr.*, cu.user_email, cu.google_email, 
+             approver.user_email as approved_by_email
+      FROM case_reports cr
+      JOIN company_users cu ON cu.id = cr.company_user_id
+      LEFT JOIN company_users approver ON approver.id = cr.approved_by
+      ${where}
+      ORDER BY cr.month DESC, cr.submitted_at DESC NULLS LAST, cr.created_at DESC
+      LIMIT $${params.length-1} OFFSET $${params.length}
+    `;
+    const rows = (await pool.query(sql, params)).rows;
+    res.json({ reports: rows });
+  } catch (e) { res.status(500).json({ error: String(e) }); }
+});
+
+app.get('/api/company/case-reports/:id', authenticateCompany, requireCompanyRole('admin','case_manager'), async (req, res) => {
+  try {
+    const sql = `
+      SELECT cr.*, cu.user_email, cu.google_email,
+             approver.user_email as approved_by_email
+      FROM case_reports cr
+      JOIN company_users cu ON cu.id = cr.company_user_id
+      LEFT JOIN company_users approver ON approver.id = cr.approved_by
+      WHERE cr.id = $1 AND cu.company_id = $2
+    `;
+    const report = (await pool.query(sql, [req.params.id, req.companyUser.company_id])).rows[0];
+    if (!report) return res.status(404).json({ error: 'Report not found' });
+    res.json(report);
+  } catch (e) { res.status(500).json({ error: String(e) }); }
+});
+
+app.post('/api/company/case-reports/:id/approve', authenticateCompany, requireCompanyRole('admin','case_manager'), async (req, res) => {
+  try {
+    const report = (await pool.query(`
+      SELECT cr.* FROM case_reports cr
+      JOIN company_users cu ON cu.id = cr.company_user_id
+      WHERE cr.id = $1 AND cu.company_id = $2
+    `, [req.params.id, req.companyUser.company_id])).rows[0];
+    if (!report) return res.status(404).json({ error: 'Report not found' });
+    if (report.status !== 'submitted') {
+      return res.status(400).json({ error: 'Only submitted reports can be approved' });
+    }
+    const result = await pool.query(`
+      UPDATE case_reports
+      SET status = 'approved', approved_by = $1, approved_at = NOW(), updated_at = NOW()
+      WHERE id = $2
+      RETURNING *
+    `, [req.companyUser.user_id, req.params.id]);
+    await logCompanyAction(req.companyUser.company_id, req.companyUser.user_id, 'case_report_approved', 'case_report', String(req.params.id), { case_id: report.case_id, month: report.month }, req, report, result.rows[0]);
+    res.json(result.rows[0]);
+  } catch (e) { res.status(500).json({ error: String(e) }); }
+});
+
+app.post('/api/company/case-reports/:id/reject', authenticateCompany, requireCompanyRole('admin','case_manager'), async (req, res) => {
+  try {
+    const { rejection_reason } = req.body || {};
+    const report = (await pool.query(`
+      SELECT cr.* FROM case_reports cr
+      JOIN company_users cu ON cu.id = cr.company_user_id
+      WHERE cr.id = $1 AND cu.company_id = $2
+    `, [req.params.id, req.companyUser.company_id])).rows[0];
+    if (!report) return res.status(404).json({ error: 'Report not found' });
+    if (report.status !== 'submitted') {
+      return res.status(400).json({ error: 'Only submitted reports can be rejected' });
+    }
+    const result = await pool.query(`
+      UPDATE case_reports
+      SET status = 'rejected', rejection_reason = $1, updated_at = NOW()
+      WHERE id = $2
+      RETURNING *
+    `, [rejection_reason || null, req.params.id]);
+    await logCompanyAction(req.companyUser.company_id, req.companyUser.user_id, 'case_report_rejected', 'case_report', String(req.params.id), { case_id: report.case_id, month: report.month, rejection_reason }, req, report, result.rows[0]);
+    res.json(result.rows[0]);
   } catch (e) { res.status(500).json({ error: String(e) }); }
 });
 
