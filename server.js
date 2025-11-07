@@ -2488,6 +2488,15 @@ async function logCompanyAction(companyId, actorId, action, targetType, targetId
 }
 
 // Company self-service endpoints
+// Get cases assigned to the authenticated company user
+app.get('/api/company/my-cases', authenticateCompany, async (req, res) => {
+  try {
+    const rows = (await pool.query('SELECT id, case_id, notes, created_at FROM user_cases WHERE company_user_id = $1 ORDER BY created_at DESC', [req.companyUser.user_id])).rows;
+    res.json({ cases: rows });
+  } catch (e) { res.status(500).json({ error: String(e) }); }
+});
+
+// Company self-service endpoints
 app.get('/api/company/me', authenticateCompany, async (req, res) => {
   try {
     const c = await pool.query('SELECT id, name, logo_base64 FROM companies WHERE id = $1', [req.companyUser.company_id]);
@@ -2573,6 +2582,27 @@ app.delete('/api/company/users/:id/cases/:caseId', authenticateCompany, requireC
     const result = await pool.query('DELETE FROM user_cases WHERE company_user_id = $1 AND id = $2', [req.params.id, req.params.caseId]);
     await logCompanyAction(req.companyUser.company_id, req.companyUser.user_id, 'user_case_deleted', 'company_user_case', String(req.params.id), { case_row_id: req.params.caseId }, req, before, null);
     res.json({ deleted: result.rowCount });
+  } catch (e) { res.status(500).json({ error: String(e) }); }
+});
+
+// Company reports: monthly totals per case
+app.get('/api/company/reports/case-monthly', authenticateCompany, async (req, res) => {
+  try {
+    const { month } = req.query || {};
+    const m = String(month || '').trim();
+    if (!/^\d{6}$/.test(m)) return res.status(400).json({ error: 'month must be YYYYMM' });
+    const params = [req.companyUser.company_id, m];
+    const sql = `
+      SELECT lr.case_id,
+             ROUND(SUM(EXTRACT(EPOCH FROM (lr.end_time - lr.start_time)) / 3600.0 - COALESCE(lr.break_hours,0))::numeric, 2) AS hours
+      FROM log_row lr
+      JOIN company_users cu ON cu.id = lr.company_user_id
+      WHERE cu.company_id = $1 AND to_char(lr.date,'YYYYMM') = $2 AND lr.case_id IS NOT NULL
+      GROUP BY lr.case_id
+      ORDER BY lr.case_id ASC
+    `;
+    const rows = (await pool.query(sql, params)).rows;
+    res.json({ month: m, totals: rows });
   } catch (e) { res.status(500).json({ error: String(e) }); }
 });
 
@@ -2743,10 +2773,11 @@ app.get('/api/company/invites/accept', async (req, res) => {
     await logCompanyAction(inv.company_id, null, 'invite_accepted', 'company_invite', String(inv.id), { invited_email: inv.invited_email }, null, inv, inv);
     
     const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
-    return res.redirect(`${frontendUrl}/portal?invite=success`);
+    return res.redirect(`${frontendUrl}/invite/accept?status=success`);
   } catch (e) {
     console.error('Invite accept error:', e);
-    res.status(500).send('Failed to accept invite');
+    const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
+    return res.redirect(`${frontendUrl}/invite/accept?status=error&message=${encodeURIComponent(String(e))}`);
   }
 });
 
