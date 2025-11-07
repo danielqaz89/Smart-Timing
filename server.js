@@ -125,6 +125,10 @@ async function initTables(){
       display_order INT DEFAULT 0,
       enforce_hourly_rate BOOLEAN DEFAULT FALSE,
       enforced_hourly_rate NUMERIC(10,2),
+      enforce_timesheet_recipient BOOLEAN DEFAULT FALSE,
+      enforced_timesheet_to TEXT,
+      enforced_timesheet_cc TEXT,
+      enforced_timesheet_bcc TEXT,
       created_at TIMESTAMP DEFAULT NOW(),
       updated_at TIMESTAMP DEFAULT NOW()
     );
@@ -402,56 +406,19 @@ async function initTables(){
       updated_at TIMESTAMP DEFAULT NOW(),
       UNIQUE(company_id, template_type)
     );
-      id SERIAL PRIMARY KEY,
-      company_id INT NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
-      template_type TEXT CHECK (template_type IN ('timesheet','report')) NOT NULL,
-      engine TEXT DEFAULT 'html',
-      template_html TEXT NOT NULL,
-      is_active BOOLEAN DEFAULT TRUE,
-      created_at TIMESTAMP DEFAULT NOW(),
-      updated_at TIMESTAMP DEFAULT NOW(),
-      UNIQUE(company_id, template_type)
-    );
 
-    CREATE TABLE IF NOT EXISTS cms_translations (
-      id TEXT PRIMARY KEY,
-      translations JSONB NOT NULL DEFAULT '{}'::jsonb,
-      updated_at TIMESTAMPTZ DEFAULT NOW()
-    );
   `);
 
   // CMS themes table
   await pool.query(`
-    CREATE TABLE IF NOT EXISTS cms_themes (
-      id TEXT PRIMARY KEY,
-      theme JSONB NOT NULL DEFAULT '{}'::jsonb,
-      updated_at TIMESTAMPTZ DEFAULT NOW()
-    );
   `);
 
   // CMS pages table
   await pool.query(`
-    CREATE TABLE IF NOT EXISTS cms_pages (
-      id TEXT PRIMARY KEY,
-      content JSONB NOT NULL DEFAULT '{}'::jsonb,
-      updated_at TIMESTAMPTZ DEFAULT NOW()
-    );
   `);
 
   // CMS contact submissions table (stores contact form entries)
   await pool.query(`
-    CREATE TABLE IF NOT EXISTS cms_contact_submissions (
-      id SERIAL PRIMARY KEY,
-      page_id TEXT NOT NULL,
-      form_id TEXT NOT NULL,
-      fields JSONB NOT NULL DEFAULT '{}'::jsonb,
-      ip_address TEXT,
-      user_agent TEXT,
-      status TEXT CHECK (status IN ('new','processed','error')) DEFAULT 'new',
-      error_message TEXT,
-      created_at TIMESTAMP DEFAULT NOW(),
-      updated_at TIMESTAMP DEFAULT NOW()
-    );
   `);
   
   // Alter existing tables (safe, only adds if not exists) - run separately
@@ -477,6 +444,10 @@ async function initTables(){
     ALTER TABLE project_info ADD COLUMN IF NOT EXISTS user_id TEXT DEFAULT 'default';
     ALTER TABLE companies ADD COLUMN IF NOT EXISTS enforce_hourly_rate BOOLEAN DEFAULT FALSE;
     ALTER TABLE companies ADD COLUMN IF NOT EXISTS enforced_hourly_rate NUMERIC(10,2);
+    ALTER TABLE companies ADD COLUMN IF NOT EXISTS enforce_timesheet_recipient BOOLEAN DEFAULT FALSE;
+    ALTER TABLE companies ADD COLUMN IF NOT EXISTS enforced_timesheet_to TEXT;
+    ALTER TABLE companies ADD COLUMN IF NOT EXISTS enforced_timesheet_cc TEXT;
+    ALTER TABLE companies ADD COLUMN IF NOT EXISTS enforced_timesheet_bcc TEXT;
     ALTER TABLE company_document_templates ADD COLUMN IF NOT EXISTS template_css TEXT;
     ALTER TABLE project_info ADD COLUMN IF NOT EXISTS is_active BOOLEAN DEFAULT true;
     ALTER TABLE project_info ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT NOW();
@@ -549,6 +520,31 @@ async function initTables(){
       ['admin', 'admin@smarttiming.com', passwordHash, 'super_admin']
     );
     console.log('✅ Default super admin created (username: admin, email: admin@smarttiming.com)');
+  }
+}
+
+// Puppeteer launcher for PDF (serverless/local)
+async function launchPuppeteerBrowser() {
+  const isServerless = !!(process.env.AWS_LAMBDA_FUNCTION_VERSION || process.env.VERCEL || process.env.CHROME_EXECUTABLE_PATH);
+  try {
+    if (isServerless) {
+      const chromiumMod = await import('@sparticuz/chromium');
+      const puppeteerCoreMod = await import('puppeteer-core');
+      const chromium = (chromiumMod.default || chromiumMod);
+      const puppeteerCore = (puppeteerCoreMod.default || puppeteerCoreMod);
+      const execPath = (await (chromium.executablePath ? chromium.executablePath() : Promise.resolve(process.env.CHROME_EXECUTABLE_PATH))) || process.env.CHROME_EXECUTABLE_PATH;
+      const args = chromium.args || ['--no-sandbox','--disable-setuid-sandbox'];
+      const defaultViewport = chromium.defaultViewport || null;
+      return await puppeteerCore.launch({ args, defaultViewport, executablePath: execPath, headless: true });
+    }
+    const puppeteerMod = await import('puppeteer');
+    const puppeteer = (puppeteerMod.default || puppeteerMod);
+    return await puppeteer.launch({ headless: 'new' });
+  } catch (e) {
+    // Fallback to standard puppeteer with safe flags
+    const puppeteerMod = await import('puppeteer');
+    const puppeteer = (puppeteerMod.default || puppeteerMod);
+    return await puppeteer.launch({ args: ['--no-sandbox','--disable-setuid-sandbox'], headless: 'new' });
   }
 }
 
@@ -2072,251 +2068,10 @@ app.get("/api/admin/profile", authenticateAdmin, async (req, res) => {
   }
 });
 
-// ===== CMS TRANSLATIONS (Admin) =====
-// Public GET for frontend translation context
-app.get('/api/admin/cms/translations', async (req, res) => {
-  try {
-    const r = await pool.query('SELECT translations FROM cms_translations WHERE id=$1', ['global']);
-    const data = r.rows[0]?.translations || {};
-    // Return raw map for client consumption
-    res.json(data);
-  } catch (e) {
-    console.error('GET cms_translations failed', e);
-    res.status(500).json({ error: 'Failed to load translations' });
-  }
-});
 
-// Protected PUT to update all translations
-app.put('/api/admin/cms/translations', authenticateAdmin, requireAdminRole('admin','super_admin'), async (req, res) => {
-  try {
-    const payload = (req.body && req.body.translations) ? req.body.translations : (req.body || {});
-    await pool.query(`
-      INSERT INTO cms_translations (id, translations, updated_at)
-      VALUES ($1, $2, NOW())
-      ON CONFLICT (id) DO UPDATE SET translations = EXCLUDED.translations, updated_at = NOW()
-    `, ['global', payload]);
 
-    try { await logAdminAction(req.adminUser.id, 'cms_translations_updated', 'cms_translations', 'global', { keys: Object.keys(payload || {}).length }, req.ip); } catch {}
 
-    res.json({ ok: true });
-  } catch (e) {
-    console.error('PUT cms_translations failed', e);
-    res.status(500).json({ error: 'Failed to save translations' });
-  }
-});
 
-// ===== CMS THEME =====
-// Public GET for global theme
-app.get('/api/admin/cms/themes/global', async (req, res) => {
-  try {
-    const r = await pool.query('SELECT theme FROM cms_themes WHERE id=$1', ['global']);
-    res.json(r.rows[0]?.theme || {});
-  } catch (e) {
-    console.error('GET cms_theme failed', e);
-    res.status(500).json({ error: 'Failed to load theme' });
-  }
-});
-
-// Protected PUT to update global theme
-app.put('/api/admin/cms/themes/global', authenticateAdmin, requireAdminRole('admin','super_admin'), async (req, res) => {
-  try {
-    const theme = req.body && (req.body.theme || req.body) || {};
-    await pool.query(`
-      INSERT INTO cms_themes (id, theme, updated_at)
-      VALUES ($1, $2, NOW())
-      ON CONFLICT (id) DO UPDATE SET theme = EXCLUDED.theme, updated_at = NOW()
-    `, ['global', theme]);
-    try { await logAdminAction(req.adminUser.id, 'cms_theme_updated', 'cms_theme', 'global', null, req.ip); } catch {}
-    res.json({ ok: true });
-  } catch (e) {
-    console.error('PUT cms_theme failed', e);
-    res.status(500).json({ error: 'Failed to save theme' });
-  }
-});
-
-// ===== CMS PAGES =====
-// Public GET page content by id
-app.get('/api/admin/cms/pages/:pageId', async (req, res) => {
-  try {
-    const pageId = req.params.pageId;
-    const r = await pool.query('SELECT content FROM cms_pages WHERE id=$1', [pageId]);
-    res.json(r.rows[0]?.content || {});
-  } catch (e) {
-    console.error('GET cms_page failed', e);
-    res.status(500).json({ error: 'Failed to load page' });
-  }
-});
-
-// Protected PUT page content by id
-app.put('/api/admin/cms/pages/:pageId', authenticateAdmin, requireAdminRole('admin','super_admin'), async (req, res) => {
-  try {
-    const pageId = req.params.pageId;
-    const content = req.body && (req.body.content || req.body) || {};
-    await pool.query(`
-      INSERT INTO cms_pages (id, content, updated_at)
-      VALUES ($1, $2, NOW())
-      ON CONFLICT (id) DO UPDATE SET content = EXCLUDED.content, updated_at = NOW()
-    `, [pageId, content]);
-    try { await logAdminAction(req.adminUser.id, 'cms_page_updated', 'cms_page', pageId, null, req.ip); } catch {}
-    res.json({ ok: true });
-  } catch (e) {
-    console.error('PUT cms_page failed', e);
-    res.status(500).json({ error: 'Failed to save page' });
-  }
-});
-
-// ===== CMS CONTACT FORM SUBMISSIONS =====
-// Public endpoint to submit contact form defined in CMS page sections (type: 'form')
-app.post('/api/cms/contact/submit', async (req, res) => {
-  try {
-    const body = req.body || {};
-    const page_id = typeof body.page_id === 'string' ? body.page_id : 'landing';
-    const form_id = typeof body.form_id === 'string' ? body.form_id : 'contact_form';
-    const values = (body.values && typeof body.values === 'object') ? body.values : {};
-
-    // Load form definition from CMS page
-    const pageRow = await pool.query('SELECT content FROM cms_pages WHERE id = $1', [page_id]);
-    const content = pageRow.rows[0]?.content || {};
-    const sections = Array.isArray(content.sections) ? content.sections : [];
-    const formSection = sections.find((s) => (s?.id === form_id) && (s?.type === 'form'))
-      || sections.find((s) => s?.type === 'form');
-
-    if (!formSection || !Array.isArray(formSection?.content?.fields)) {
-      return res.status(400).json({ error: 'Form not configured' });
-    }
-
-    const fieldsDef = formSection.content.fields;
-    const errors = [];
-    const clean = {};
-
-    for (const f of fieldsDef) {
-      const name = String(f?.name || '').trim();
-      if (!name) continue;
-      const type = String(f?.type || 'text');
-      const required = Boolean(f?.required);
-      let v = values[name];
-
-      if (type === 'checkbox') {
-        v = Boolean(v);
-        if (required && v !== true) errors.push(`${name} required`);
-      } else if (type === 'email') {
-        if (v == null || typeof v !== 'string' || v.trim() === '') {
-          if (required) errors.push(`${name} required`);
-        } else {
-          v = String(v).trim();
-          const re = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
-          if (!re.test(v)) errors.push(`${name} invalid`);
-        }
-      } else {
-        if (v == null || typeof v !== 'string' || v.trim() === '') {
-          if (required) errors.push(`${name} required`);
-        } else {
-          v = String(v).trim();
-        }
-      }
-      if (v !== undefined) clean[name] = v;
-    }
-
-    if (errors.length) {
-      return res.status(400).json({ error: 'Validation failed', details: errors });
-    }
-
-    // Basic honeypot (optional hidden field)
-    if (values.hp) {
-      return res.json({ ok: true, skipped: true });
-    }
-
-    const ip = req.ip || null;
-    const ua = req.headers?.['user-agent'] || null;
-
-    const insert = await pool.query(`
-      INSERT INTO cms_contact_submissions (page_id, form_id, fields, ip_address, user_agent)
-      VALUES ($1, $2, $3, $4, $5)
-      RETURNING id, created_at
-    `, [page_id, form_id, clean, ip, ua]);
-
-    const submissionId = insert.rows[0].id;
-    let webhook = 'skipped';
-
-    if (process.env.CONTACT_WEBHOOK_URL) {
-      try {
-        const resp = await fetch(process.env.CONTACT_WEBHOOK_URL, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            submission_id: submissionId,
-            page_id,
-            form_id,
-            fields: clean,
-            ip_address: ip,
-            user_agent: ua,
-            created_at: insert.rows[0].created_at,
-          }),
-        });
-        webhook = resp.ok ? 'success' : `error:${resp.status}`;
-        await pool.query(
-          'UPDATE cms_contact_submissions SET status = $1, updated_at = NOW(), error_message = $2 WHERE id = $3',
-          [resp.ok ? 'processed' : 'error', resp.ok ? null : `Webhook HTTP ${resp.status}`, submissionId]
-        );
-        await pool.query(
-          `INSERT INTO sync_log (user_id, sync_type, status, row_count, error_message) VALUES ($1, 'webhook_send', $2, $3, $4)`,
-          ['default', resp.ok ? 'success' : 'error', 1, resp.ok ? null : `HTTP ${resp.status}`]
-        );
-      } catch (e) {
-        webhook = 'error';
-        await pool.query(
-          'UPDATE cms_contact_submissions SET status = $1, updated_at = NOW(), error_message = $2 WHERE id = $3',
-          ['error', String(e), submissionId]
-        );
-        await pool.query(
-          `INSERT INTO sync_log (user_id, sync_type, status, row_count, error_message) VALUES ($1, 'webhook_send', 'error', $2, $3)`,
-          ['default', 0, String(e)]
-        );
-      }
-    }
-
-    res.json({ ok: true, submission_id: submissionId, webhook });
-  } catch (e) {
-    console.error('Contact submit error:', e);
-    res.status(500).json({ error: 'Failed to submit form' });
-  }
-});
-
-// Admin: list contact submissions
-app.get('/api/admin/cms/contact/submissions', authenticateAdmin, requireAdminRole('admin','super_admin'), async (req, res) => {
-  try {
-    const { page_id, status, limit } = req.query || {};
-    const clauses = [];
-    const vals = [];
-    if (page_id) { vals.push(String(page_id)); clauses.push(`page_id = $${vals.length}`); }
-    if (status) { vals.push(String(status)); clauses.push(`status = $${vals.length}`); }
-    const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
-    const lim = Math.min(parseInt(limit || '50', 10) || 50, 200);
-    const rows = (await pool.query(`SELECT * FROM cms_contact_submissions ${where} ORDER BY created_at DESC LIMIT ${lim}`, vals)).rows;
-    res.json({ submissions: rows });
-  } catch (e) {
-    console.error('List submissions error:', e);
-    res.status(500).json({ error: 'Failed to list submissions' });
-  }
-});
-
-// Admin: update submission status
-app.patch('/api/admin/cms/contact/submissions/:id', authenticateAdmin, requireAdminRole('admin','super_admin'), async (req, res) => {
-  try {
-    const { status, error_message } = req.body || {};
-    if (!['new','processed','error'].includes(status)) {
-      return res.status(400).json({ error: 'Invalid status' });
-    }
-    const r = await pool.query(
-      'UPDATE cms_contact_submissions SET status = $1, error_message = COALESCE($2, error_message), updated_at = NOW() WHERE id = $3 RETURNING *',
-      [status, error_message || null, req.params.id]
-    );
-    res.json(r.rows[0] || null);
-  } catch (e) {
-    console.error('Update submission error:', e);
-    res.status(500).json({ error: 'Failed to update submission' });
-  }
-});
 
 // ===== COMPANY USER MANAGEMENT (ADMIN) =====
 // GET /api/admin/companies/:companyId/users - List users for a company (with cases)
@@ -2520,15 +2275,25 @@ async function logCompanyAction(companyId, actorId, action, targetType, targetId
 // Company policy endpoints
 app.get('/api/company/policy', authenticateCompany, async (req, res) => {
   try {
-    const row = (await pool.query('SELECT enforce_hourly_rate, enforced_hourly_rate FROM companies WHERE id = $1', [req.companyUser.company_id])).rows[0];
-    res.json({ enforce_hourly_rate: row?.enforce_hourly_rate || false, hourly_rate: row?.enforced_hourly_rate || null });
+    const row = (await pool.query('SELECT enforce_hourly_rate, enforced_hourly_rate, enforce_timesheet_recipient, enforced_timesheet_to, enforced_timesheet_cc, enforced_timesheet_bcc FROM companies WHERE id = $1', [req.companyUser.company_id])).rows[0];
+    res.json({
+      enforce_hourly_rate: row?.enforce_hourly_rate || false,
+      hourly_rate: row?.enforced_hourly_rate || null,
+      enforce_timesheet_recipient: row?.enforce_timesheet_recipient || false,
+      enforced_timesheet_to: row?.enforced_timesheet_to || null,
+      enforced_timesheet_cc: row?.enforced_timesheet_cc || null,
+      enforced_timesheet_bcc: row?.enforced_timesheet_bcc || null,
+    });
   } catch (e) { res.status(500).json({ error: String(e) }); }
 });
 
 app.put('/api/company/policy', authenticateCompany, requireCompanyRole('admin'), async (req, res) => {
   try {
-    const { enforce_hourly_rate, hourly_rate } = req.body || {};
-    await pool.query('UPDATE companies SET enforce_hourly_rate = COALESCE($1, enforce_hourly_rate), enforced_hourly_rate = COALESCE($2, enforced_hourly_rate), updated_at = NOW() WHERE id = $3', [enforce_hourly_rate, hourly_rate, req.companyUser.company_id]);
+    const { enforce_hourly_rate, hourly_rate, enforce_timesheet_recipient, enforced_timesheet_to, enforced_timesheet_cc, enforced_timesheet_bcc } = req.body || {};
+    await pool.query(
+      'UPDATE companies SET enforce_hourly_rate = COALESCE($1, enforce_hourly_rate), enforced_hourly_rate = COALESCE($2, enforced_hourly_rate), enforce_timesheet_recipient = COALESCE($3, enforce_timesheet_recipient), enforced_timesheet_to = COALESCE($4, enforced_timesheet_to), enforced_timesheet_cc = COALESCE($5, enforced_timesheet_cc), enforced_timesheet_bcc = COALESCE($6, enforced_timesheet_bcc), updated_at = NOW() WHERE id = $7',
+      [enforce_hourly_rate, hourly_rate, enforce_timesheet_recipient, enforced_timesheet_to, enforced_timesheet_cc, enforced_timesheet_bcc, req.companyUser.company_id]
+    );
     res.json({ ok: true });
   } catch (e) { res.status(500).json({ error: String(e) }); }
 });
@@ -2589,8 +2354,7 @@ app.post('/api/company/templates/:type/pdf', authenticateCompany, requireCompany
     const html = `<style>${css}</style>\n${tpl(data)}`;
     let browser;
     try {
-      const { default: puppeteer } = await import('puppeteer');
-      browser = await puppeteer.launch({ args: ['--no-sandbox','--disable-setuid-sandbox'] });
+      browser = await launchPuppeteerBrowser();
       const page = await browser.newPage();
       await page.setContent(html, { waitUntil: 'networkidle0' });
       const pdf = await page.pdf({ format: 'A4', printBackground: true });
@@ -2608,8 +2372,10 @@ app.post('/api/company/templates/:type/pdf', authenticateCompany, requireCompany
 app.post('/api/company/templates/:type/send', authenticateCompany, requireCompanyRole('admin'), async (req, res) => {
   try {
     const t = String(req.params.type);
-    const { to, subject, message, month, company_user_id, template_html, template_css } = req.body || {};
-    if (!to) return res.status(400).json({ error: 'Missing recipient' });
+    const { to, cc, bcc, subject, message, month, company_user_id, template_html, template_css } = req.body || {};
+    if (!to && !((await pool.query('SELECT enforce_timesheet_recipient FROM companies WHERE id = $1',[req.companyUser.company_id])).rows[0]?.enforce_timesheet_recipient)) {
+      return res.status(400).json({ error: 'Missing recipient' });
+    }
     const row = (await pool.query('SELECT template_html, template_css FROM company_document_templates WHERE company_id = $1 AND template_type = $2', [req.companyUser.company_id, t])).rows[0];
     const htmlRaw = String(template_html || row?.template_html || '');
     const css = String(template_css || row?.template_css || '');
@@ -2622,8 +2388,7 @@ app.post('/api/company/templates/:type/send', authenticateCompany, requireCompan
     // Render to PDF
     let browser; let pdf;
     try {
-      const { default: puppeteer } = await import('puppeteer');
-      browser = await puppeteer.launch({ args: ['--no-sandbox','--disable-setuid-sandbox'] });
+      browser = await launchPuppeteerBrowser();
       const page = await browser.newPage();
       await page.setContent(html, { waitUntil: 'networkidle0' });
       pdf = await page.pdf({ format: 'A4', printBackground: true });
@@ -2634,7 +2399,12 @@ app.post('/api/company/templates/:type/send', authenticateCompany, requireCompan
     }
 
     // Email delivery
-    const toEmail = String(to);
+    // Resolve recipients with company policy enforcement
+    const policy = (await pool.query('SELECT enforce_timesheet_recipient, enforced_timesheet_to, enforced_timesheet_cc, enforced_timesheet_bcc FROM companies WHERE id = $1', [req.companyUser.company_id])).rows[0] || {};
+    let toEmail = policy.enforce_timesheet_recipient ? String(policy.enforced_timesheet_to || '') : String(to || '');
+    const ccEmail = policy.enforce_timesheet_recipient ? (policy.enforced_timesheet_cc || undefined) : (cc || undefined);
+    const bccEmail = policy.enforce_timesheet_recipient ? (policy.enforced_timesheet_bcc || undefined) : (bcc || undefined);
+
     const subj = subject || `${t === 'timesheet' ? 'Timeliste' : 'Rapport'} ${data.period.month_label}`;
     const msg = message || `Vedlagt ${t === 'timesheet' ? 'timeliste' : 'rapport'} for ${data.period.month_label}.`;
     const provider = process.env.SMTP_HOST ? {
@@ -2649,6 +2419,8 @@ app.post('/api/company/templates/:type/send', authenticateCompany, requireCompan
     await transport.sendMail({
       from: fromAddr,
       to: toEmail,
+      cc: ccEmail,
+      bcc: bccEmail,
       subject: subj,
       text: msg,
       attachments: [{ filename: `${t}.pdf`, content: pdf, contentType: 'application/pdf' }],
