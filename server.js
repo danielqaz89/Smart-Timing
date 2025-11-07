@@ -467,9 +467,32 @@ async function initTables(){
     ALTER TABLE user_settings ADD COLUMN IF NOT EXISTS google_access_token TEXT;
     ALTER TABLE user_settings ADD COLUMN IF NOT EXISTS google_refresh_token TEXT;
     ALTER TABLE user_settings ADD COLUMN IF NOT EXISTS google_token_expiry TIMESTAMP;
+
+    -- Ensure CMS tables have columns required by indexes and code (legacy DB compat)
     ALTER TABLE cms_pages ADD COLUMN IF NOT EXISTS page_id TEXT;
     ALTER TABLE cms_pages ADD COLUMN IF NOT EXISTS page_name TEXT;
+    ALTER TABLE cms_pages ADD COLUMN IF NOT EXISTS is_published BOOLEAN DEFAULT false;
+    ALTER TABLE cms_pages ADD COLUMN IF NOT EXISTS sections JSONB;
+    ALTER TABLE cms_pages ADD COLUMN IF NOT EXISTS meta JSONB;
+    ALTER TABLE cms_pages ADD COLUMN IF NOT EXISTS updated_by INT;
+    ALTER TABLE cms_pages ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT NOW();
+    ALTER TABLE cms_pages ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT NOW();
+
     ALTER TABLE cms_contact_submissions ADD COLUMN IF NOT EXISTS page_id TEXT;
+    ALTER TABLE cms_contact_submissions ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'new';
+    ALTER TABLE cms_contact_submissions ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT NOW();
+    ALTER TABLE cms_contact_submissions ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT NOW();
+
+    ALTER TABLE cms_themes ADD COLUMN IF NOT EXISTS theme_id TEXT;
+    ALTER TABLE cms_themes ADD COLUMN IF NOT EXISTS theme_type TEXT;
+    ALTER TABLE cms_themes ADD COLUMN IF NOT EXISTS company_id INT;
+
+    ALTER TABLE cms_translations ADD COLUMN IF NOT EXISTS translation_key TEXT;
+    ALTER TABLE cms_translations ADD COLUMN IF NOT EXISTS category TEXT;
+
+    ALTER TABLE cms_media ADD COLUMN IF NOT EXISTS uploaded_by INT;
+    ALTER TABLE cms_media ADD COLUMN IF NOT EXISTS file_type TEXT;
+    ALTER TABLE cms_media ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT NOW();
   `);
   
   // Backfill missing CMS page_id for older DBs (columns added above)
@@ -479,16 +502,13 @@ async function initTables(){
       SELECT column_name FROM information_schema.columns 
       WHERE table_name = 'cms_pages' AND column_name IN ('page_id', 'page_name')
     `);
-    if (colCheck.rows.length === 2) {
-      await pool.query(`
-        UPDATE cms_pages
-        SET page_id = lower(regexp_replace(coalesce(page_name, id::text), '[^a-z0-9]+', '-', 'g'))
-        WHERE (page_id IS NULL OR page_id = '');
-      `);
-      console.log('✅ CMS page_id backfill completed');
-    } else {
-      console.log('ℹ️  CMS page_id/page_name columns not yet available, skipping backfill');
-    }
+    // Avoid referencing page_name to guarantee compatibility
+    await pool.query(`
+      UPDATE cms_pages
+      SET page_id = lower(regexp_replace(id::text, '[^a-z0-9]+', '-', 'g'))
+      WHERE (page_id IS NULL OR page_id = '');
+    `);
+    console.log('✅ CMS page_id backfill completed (from id)');
   } catch (e) {
     console.log('⚠️  CMS page_id backfill skipped:', e.message);
   }
@@ -521,8 +541,7 @@ async function initTables(){
     CREATE INDEX IF NOT EXISTS idx_admin_audit_log_admin ON admin_audit_log(admin_id, created_at DESC);
     CREATE INDEX IF NOT EXISTS idx_admin_audit_log_action ON admin_audit_log(action, created_at DESC);
     CREATE INDEX IF NOT EXISTS idx_system_settings_key ON system_settings(setting_key);
-    CREATE INDEX IF NOT EXISTS idx_cms_pages_page_id ON cms_pages(page_id);
-    CREATE INDEX IF NOT EXISTS idx_cms_pages_published ON cms_pages(is_published);
+    -- Moved cms_pages indexes to guarded creation below
     CREATE INDEX IF NOT EXISTS idx_cms_themes_theme_id ON cms_themes(theme_id);
     CREATE INDEX IF NOT EXISTS idx_cms_themes_type_company ON cms_themes(theme_type, company_id) WHERE theme_type = 'company';
     CREATE INDEX IF NOT EXISTS idx_cms_translations_key ON cms_translations(translation_key);
@@ -530,8 +549,36 @@ async function initTables(){
     CREATE INDEX IF NOT EXISTS idx_cms_media_uploaded_by ON cms_media(uploaded_by, created_at DESC);
     CREATE INDEX IF NOT EXISTS idx_cms_media_file_type ON cms_media(file_type);
     CREATE INDEX IF NOT EXISTS idx_cms_contact_submissions_status ON cms_contact_submissions(status, created_at DESC);
-    CREATE INDEX IF NOT EXISTS idx_cms_contact_submissions_page_id ON cms_contact_submissions(page_id);
+    -- Moved cms_contact_submissions(page_id) to guarded creation below
     CREATE INDEX IF NOT EXISTS idx_company_requests_status ON company_requests(status, created_at DESC);
+  `);
+
+  // Guarded index creation for legacy DBs (only if columns exist)
+  await pool.query(`
+    DO $$ BEGIN
+      IF EXISTS (
+        SELECT 1 FROM information_schema.columns 
+        WHERE table_name = 'cms_pages' AND column_name = 'page_id'
+      ) THEN
+        CREATE INDEX IF NOT EXISTS idx_cms_pages_page_id ON cms_pages(page_id);
+      END IF;
+    END $$;
+    DO $$ BEGIN
+      IF EXISTS (
+        SELECT 1 FROM information_schema.columns 
+        WHERE table_name = 'cms_pages' AND column_name = 'is_published'
+      ) THEN
+        CREATE INDEX IF NOT EXISTS idx_cms_pages_published ON cms_pages(is_published);
+      END IF;
+    END $$;
+    DO $$ BEGIN
+      IF EXISTS (
+        SELECT 1 FROM information_schema.columns 
+        WHERE table_name = 'cms_contact_submissions' AND column_name = 'page_id'
+      ) THEN
+        CREATE INDEX IF NOT EXISTS idx_cms_contact_submissions_page_id ON cms_contact_submissions(page_id);
+      END IF;
+    END $$;
   `);
   console.log("✅ Tables initialized with persistence schema");
   
