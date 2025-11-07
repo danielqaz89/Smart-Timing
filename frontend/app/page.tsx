@@ -1,8 +1,8 @@
 "use client";
-import { useEffect, useMemo, useState, forwardRef, useRef } from "react";
+import { useEffect, useMemo, useState, useRef, forwardRef } from "react";
 import useSWR, { useSWRConfig } from "swr";
 import useSWRInfinite from "swr/infinite";
-import { useVirtualizer } from "@tanstack/react-virtual";
+import { TableVirtuoso } from 'react-virtuoso';
 import { useUserSettings, useQuickTemplates, useProjectInfo } from "../lib/hooks";
 import {
   Box,
@@ -1248,13 +1248,6 @@ export default function Home() {
     setSelectedIds(new Set());
   }
 
-  const parentRef = useMemo(() => ({ current: null as any }), []);
-  const rowVirtualizer = useVirtualizer({
-    count: logs.length,
-    getScrollElement: () => parentRef.current,
-    estimateSize: () => 40,
-    overscan: 8,
-  });
 
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editForm, setEditForm] = useState<any>({});
@@ -1310,18 +1303,6 @@ export default function Home() {
     cancelEdit();
   }
 
-  // Infinite scroll: load previous month when near bottom
-  useEffect(() => {
-    const el = parentRef.current as HTMLElement | null;
-    if (!el) return;
-    function onScroll() {
-      if (el.scrollTop + el.clientHeight >= el.scrollHeight - 80 && !isValidating) {
-        setSize((s) => s + 1);
-      }
-    }
-    el.addEventListener("scroll", onScroll);
-    return () => el.removeEventListener("scroll", onScroll);
-  }, [parentRef, isValidating, setSize]);
 
   // Keyboard shortcuts for month navigation (only when not typing in input)
   useEffect(() => {
@@ -1908,31 +1889,33 @@ export default function Home() {
                 </Stack>
               )}
             </Stack>
-            <div style={{ height: 360, overflow: 'auto' }} ref={parentRef}>
-              <Table size="small" sx={{ minWidth: 900 }}>
-                <TableHead>
-                <TableRow>
-                  {bulkMode && <TableCell padding="checkbox" />}
-                  <TableCell>Dato</TableCell>
-                  <TableCell>Inn</TableCell>
-                  <TableCell>Ut</TableCell>
-                  <TableCell>Pause</TableCell>
-                  <TableCell>Aktivitet</TableCell>
-                  <TableCell>Tittel</TableCell>
-                  <TableCell>Prosjekt</TableCell>
-                  <TableCell>Sted</TableCell>
-                  <TableCell>Notater</TableCell>
-                  <TableCell align="right">Utgifter</TableCell>
-                  <TableCell align="right">Handlinger</TableCell>
-                </TableRow>
-              </TableHead>
-              <TableBody>
-                <div style={{ height: rowVirtualizer.getTotalSize(), position: 'relative' }}>
-                  {rowVirtualizer.getVirtualItems().map((vi) => {
-                    const r = logs[vi.index];
-                    return (
-                      <div key={r.id} style={{ position: 'absolute', top: vi.start, left: 0, right: 0 }}>
-                        <TableRow hover>
+            <Box sx={{ height: 500, border: 1, borderColor: 'divider', borderRadius: 1 }}>
+              <TableVirtuoso
+                data={logs}
+                style={{ height: '100%' }}
+                components={{
+                  Table: (props) => <Table {...props} size="small" sx={{ minWidth: 900 }} />,
+                  TableHead: TableHead,
+                  TableRow: TableRow,
+                  TableBody: forwardRef<HTMLTableSectionElement>((props, ref) => <TableBody {...props} ref={ref} />),
+                }}
+                fixedHeaderContent={() => (
+                  <TableRow>
+                    {bulkMode && <TableCell padding="checkbox" sx={{ bgcolor: 'background.paper' }} />}
+                    <TableCell sx={{ bgcolor: 'background.paper' }}>Dato</TableCell>
+                    <TableCell sx={{ bgcolor: 'background.paper' }}>Inn</TableCell>
+                    <TableCell sx={{ bgcolor: 'background.paper' }}>Ut</TableCell>
+                    <TableCell sx={{ bgcolor: 'background.paper' }}>Pause</TableCell>
+                    <TableCell sx={{ bgcolor: 'background.paper' }}>Aktivitet</TableCell>
+                    <TableCell sx={{ bgcolor: 'background.paper' }}>Tittel</TableCell>
+                    <TableCell sx={{ bgcolor: 'background.paper' }}>Prosjekt</TableCell>
+                    <TableCell sx={{ bgcolor: 'background.paper' }}>Sted</TableCell>
+                    <TableCell sx={{ bgcolor: 'background.paper' }}>Notater</TableCell>
+                    <TableCell align="right" sx={{ bgcolor: 'background.paper' }}>Utgifter</TableCell>
+                    <TableCell align="right" sx={{ bgcolor: 'background.paper' }}>Handlinger</TableCell>
+                  </TableRow>
+                )}
+                itemContent={(index, r) => (
                           {bulkMode && editingId !== r.id && (
                             <TableCell padding="checkbox">
                               <input 
@@ -1946,11 +1929,47 @@ export default function Home() {
                           {editingId === r.id ? (
                             <>
                               {bulkMode && <TableCell />}
-                              <TableCell><TextField type="date" value={editForm.date} onChange={(e)=>setEditForm({...editForm, date: e.target.value})} size="small" /></TableCell>
-                              <TableCell><TextField type="time" value={editForm.start} onChange={(e)=>setEditForm({...editForm, start: e.target.value})} size="small" /></TableCell>
-                              <TableCell><TextField type="time" value={editForm.end} onChange={(e)=>setEditForm({...editForm, end: e.target.value})} size="small" /></TableCell>
-                              <TableCell><TextField type="number" value={editForm.breakHours} onChange={(e)=>setEditForm({...editForm, breakHours: Number(e.target.value)})} size="small" /></TableCell>
-                              <TableCell>
+                              <TableCell sx={{ minWidth: 140 }}>
+                                <TextField 
+                                  type="date" 
+                                  value={editForm.date} 
+                                  onChange={(e)=>setEditForm({...editForm, date: e.target.value})} 
+                                  size="small" 
+                                  fullWidth
+                                  InputLabelProps={{ shrink: true }}
+                                />
+                              </TableCell>
+                              <TableCell sx={{ minWidth: 100 }}>
+                                <TextField 
+                                  type="time" 
+                                  value={editForm.start} 
+                                  onChange={(e)=>setEditForm({...editForm, start: e.target.value})} 
+                                  size="small" 
+                                  fullWidth
+                                  InputLabelProps={{ shrink: true }}
+                                />
+                              </TableCell>
+                              <TableCell sx={{ minWidth: 100 }}>
+                                <TextField 
+                                  type="time" 
+                                  value={editForm.end} 
+                                  onChange={(e)=>setEditForm({...editForm, end: e.target.value})} 
+                                  size="small" 
+                                  fullWidth
+                                  InputLabelProps={{ shrink: true }}
+                                />
+                              </TableCell>
+                              <TableCell sx={{ minWidth: 80 }}>
+                                <TextField 
+                                  type="number" 
+                                  value={editForm.breakHours} 
+                                  onChange={(e)=>setEditForm({...editForm, breakHours: Number(e.target.value)})} 
+                                  size="small" 
+                                  fullWidth
+                                  inputProps={{ step: 0.25, min: 0 }}
+                                />
+                              </TableCell>
+                              <TableCell sx={{ minWidth: 120 }}>
                                 <FormControl size="small" fullWidth>
                                   <Select value={editForm.activity} onChange={(e)=>setEditForm({...editForm, activity: e.target.value})}>
                                     <MenuItem value="Work">Arbeid</MenuItem>
@@ -1958,14 +1977,73 @@ export default function Home() {
                                   </Select>
                                 </FormControl>
                               </TableCell>
-                              <TableCell><TextField value={editForm.title} onChange={(e)=>setEditForm({...editForm, title: e.target.value})} size="small" /></TableCell>
-                              <TableCell><TextField value={editForm.project} onChange={(e)=>setEditForm({...editForm, project: e.target.value})} size="small" /></TableCell>
-                              <TableCell><TextField value={editForm.place} onChange={(e)=>setEditForm({...editForm, place: e.target.value})} size="small" /></TableCell>
-                              <TableCell><TextField value={editForm.notes} onChange={(e)=>setEditForm({...editForm, notes: e.target.value})} size="small" /></TableCell>
-                              <TableCell align="right"><TextField type="number" value={editForm.expenseCoverage} onChange={(e)=>setEditForm({...editForm, expenseCoverage: Number(e.target.value)||0})} size="small" InputProps={{inputProps:{min:0}}} /></TableCell>
-                              <TableCell align="right">
-                                <IconButton aria-label="Lagre endringer" size="small" onClick={() => saveEdit(r.id, r)}><SaveIcon fontSize="small" /></IconButton>
-                                <IconButton aria-label="Avbryt redigering" size="small" onClick={() => cancelEdit()}><CloseIcon fontSize="small" /></IconButton>
+                              <TableCell sx={{ minWidth: 150 }}>
+                                <TextField 
+                                  value={editForm.title} 
+                                  onChange={(e)=>setEditForm({...editForm, title: e.target.value})} 
+                                  size="small" 
+                                  fullWidth
+                                  placeholder="Tittel"
+                                />
+                              </TableCell>
+                              <TableCell sx={{ minWidth: 130 }}>
+                                <TextField 
+                                  value={editForm.project} 
+                                  onChange={(e)=>setEditForm({...editForm, project: e.target.value})} 
+                                  size="small" 
+                                  fullWidth
+                                  placeholder="Prosjekt"
+                                />
+                              </TableCell>
+                              <TableCell sx={{ minWidth: 120 }}>
+                                <TextField 
+                                  value={editForm.place} 
+                                  onChange={(e)=>setEditForm({...editForm, place: e.target.value})} 
+                                  size="small" 
+                                  fullWidth
+                                  placeholder="Sted"
+                                />
+                              </TableCell>
+                              <TableCell sx={{ minWidth: 150 }}>
+                                <TextField 
+                                  value={editForm.notes} 
+                                  onChange={(e)=>setEditForm({...editForm, notes: e.target.value})} 
+                                  size="small" 
+                                  fullWidth
+                                  placeholder="Notater"
+                                  multiline
+                                  maxRows={2}
+                                />
+                              </TableCell>
+                              <TableCell align="right" sx={{ minWidth: 100 }}>
+                                <TextField 
+                                  type="number" 
+                                  value={editForm.expenseCoverage} 
+                                  onChange={(e)=>setEditForm({...editForm, expenseCoverage: Number(e.target.value)||0})} 
+                                  size="small" 
+                                  fullWidth
+                                  InputProps={{ inputProps: { min: 0, step: 10 }}}
+                                  placeholder="0"
+                                />
+                              </TableCell>
+                              <TableCell align="right" sx={{ minWidth: 100 }}>
+                                <Stack direction="row" spacing={0.5} justifyContent="flex-end">
+                                  <IconButton 
+                                    aria-label="Lagre endringer" 
+                                    size="small" 
+                                    onClick={() => saveEdit(r.id, r)}
+                                    color="primary"
+                                  >
+                                    <SaveIcon fontSize="small" />
+                                  </IconButton>
+                                  <IconButton 
+                                    aria-label="Avbryt redigering" 
+                                    size="small" 
+                                    onClick={() => cancelEdit()}
+                                  >
+                                    <CloseIcon fontSize="small" />
+                                  </IconButton>
+                                </Stack>
                               </TableCell>
                             </>
                           ) : (
@@ -1988,21 +2066,18 @@ export default function Home() {
                               </TableCell>
                             </>
                           )}
-                        </TableRow>
-                      </div>
-                    );
-                  })}
-                </div>
-                {!isLoading && logs.length === 0 && (
-                  <TableRow>
-                    <TableCell colSpan={10}>
-                      <Typography variant="body2">Ingen rader i denne måneden enda.</Typography>
-                    </TableCell>
-                  </TableRow>
+                        </>
+                      )}
+                    </>
+                  )
                 )}
-              </TableBody>
-              </Table>
-            </div>
+              />
+              {!isLoading && logs.length === 0 && (
+                <Box sx={{ p: 3, textAlign: 'center' }}>
+                  <Typography variant="body2" color="text.secondary">Ingen rader i denne måneden enda.</Typography>
+                </Box>
+              )}
+            </Box>
           </CardContent>
         </Card>
       </Box>
