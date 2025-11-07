@@ -473,16 +473,16 @@ async function initTables(){
   `);
   
   // Backfill missing CMS page_id for older DBs (columns added above)
-  await pool.query(`
-    DO $$
-    BEGIN
-      IF EXISTS (SELECT 1 FROM cms_pages LIMIT 1) THEN
-        UPDATE cms_pages
-        SET page_id = lower(regexp_replace(coalesce(page_name, id::text), '[^a-z0-9]+', '-', 'g'))
-        WHERE (page_id IS NULL OR page_id = '');
-      END IF;
-    END $$;
-  `);
+  try {
+    await pool.query(`
+      UPDATE cms_pages
+      SET page_id = lower(regexp_replace(coalesce(page_name, id::text), '[^a-z0-9]+', '-', 'g'))
+      WHERE (page_id IS NULL OR page_id = '');
+    `);
+  } catch (e) {
+    // Ignore if cms_pages is empty or doesn't exist yet (no harm)
+    console.log('CMS page_id backfill skipped (table empty or not present)');
+  }
   
   // Create indexes (after columns exist)
   await pool.query(`
