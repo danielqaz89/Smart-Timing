@@ -479,16 +479,13 @@ async function initTables(){
       SELECT column_name FROM information_schema.columns 
       WHERE table_name = 'cms_pages' AND column_name IN ('page_id', 'page_name')
     `);
-    if (colCheck.rows.length === 2) {
-      await pool.query(`
-        UPDATE cms_pages
-        SET page_id = lower(regexp_replace(coalesce(page_name, id::text), '[^a-z0-9]+', '-', 'g'))
-        WHERE (page_id IS NULL OR page_id = '');
-      `);
-      console.log('✅ CMS page_id backfill completed');
-    } else {
-      console.log('ℹ️  CMS page_id/page_name columns not yet available, skipping backfill');
-    }
+    // Avoid referencing page_name to guarantee compatibility
+    await pool.query(`
+      UPDATE cms_pages
+      SET page_id = lower(regexp_replace(id::text, '[^a-z0-9]+', '-', 'g'))
+      WHERE (page_id IS NULL OR page_id = '');
+    `);
+    console.log('✅ CMS page_id backfill completed (from id)');
   } catch (e) {
     console.log('⚠️  CMS page_id backfill skipped:', e.message);
   }
