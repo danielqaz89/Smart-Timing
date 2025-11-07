@@ -309,8 +309,8 @@ async function initTables(){
     -- CMS Pages table (for landing page content)
     CREATE TABLE IF NOT EXISTS cms_pages (
       id SERIAL PRIMARY KEY,
-      page_id TEXT UNIQUE NOT NULL,
-      page_name TEXT NOT NULL,
+      page_id TEXT,
+      page_name TEXT,
       sections JSONB NOT NULL DEFAULT '[]'::jsonb,
       meta JSONB NOT NULL DEFAULT '{}'::jsonb,
       is_published BOOLEAN DEFAULT false,
@@ -467,17 +467,31 @@ async function initTables(){
     ALTER TABLE user_settings ADD COLUMN IF NOT EXISTS google_access_token TEXT;
     ALTER TABLE user_settings ADD COLUMN IF NOT EXISTS google_refresh_token TEXT;
     ALTER TABLE user_settings ADD COLUMN IF NOT EXISTS google_token_expiry TIMESTAMP;
+    ALTER TABLE cms_pages ADD COLUMN IF NOT EXISTS page_id TEXT;
+    ALTER TABLE cms_pages ADD COLUMN IF NOT EXISTS page_name TEXT;
+    ALTER TABLE cms_contact_submissions ADD COLUMN IF NOT EXISTS page_id TEXT;
   `);
   
-  // Backfill missing CMS columns for older DBs (ensure compatibility)
-  await pool.query(`
-    ALTER TABLE cms_pages ADD COLUMN IF NOT EXISTS page_id TEXT;
-    ALTER TABLE cms_contact_submissions ADD COLUMN IF NOT EXISTS page_id TEXT;
-
-    UPDATE cms_pages
-    SET page_id = lower(regexp_replace(coalesce(page_name, id::text), '[^a-z0-9]+', '-', 'g'))
-    WHERE (page_id IS NULL OR page_id = '');
-  `);
+  // Backfill missing CMS page_id for older DBs (columns added above)
+  try {
+    // Check if page_name column exists before attempting UPDATE
+    const colCheck = await pool.query(`
+      SELECT column_name FROM information_schema.columns 
+      WHERE table_name = 'cms_pages' AND column_name IN ('page_id', 'page_name')
+    `);
+    if (colCheck.rows.length === 2) {
+      await pool.query(`
+        UPDATE cms_pages
+        SET page_id = lower(regexp_replace(coalesce(page_name, id::text), '[^a-z0-9]+', '-', 'g'))
+        WHERE (page_id IS NULL OR page_id = '');
+      `);
+      console.log('✅ CMS page_id backfill completed');
+    } else {
+      console.log('ℹ️  CMS page_id/page_name columns not yet available, skipping backfill');
+    }
+  } catch (e) {
+    console.log('⚠️  CMS page_id backfill skipped:', e.message);
+  }
   
   // Create indexes (after columns exist)
   await pool.query(`
