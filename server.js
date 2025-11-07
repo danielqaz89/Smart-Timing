@@ -470,12 +470,15 @@ async function initTables(){
   `);
   
   // Backfill missing CMS columns for older DBs (ensure compatibility)
+  // Step 1: Add columns
   await pool.query(`
     ALTER TABLE cms_pages ADD COLUMN IF NOT EXISTS page_id TEXT;
     ALTER TABLE cms_pages ADD COLUMN IF NOT EXISTS page_name TEXT;
     ALTER TABLE cms_contact_submissions ADD COLUMN IF NOT EXISTS page_id TEXT;
-
-    -- Populate page_id only if the table exists and has rows
+  `);
+  
+  // Step 2: Populate page_id (in separate transaction so new columns are visible)
+  await pool.query(`
     DO $$
     BEGIN
       IF EXISTS (SELECT 1 FROM cms_pages LIMIT 1) THEN
