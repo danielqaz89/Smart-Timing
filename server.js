@@ -467,17 +467,12 @@ async function initTables(){
     ALTER TABLE user_settings ADD COLUMN IF NOT EXISTS google_access_token TEXT;
     ALTER TABLE user_settings ADD COLUMN IF NOT EXISTS google_refresh_token TEXT;
     ALTER TABLE user_settings ADD COLUMN IF NOT EXISTS google_token_expiry TIMESTAMP;
-  `);
-  
-  // Backfill missing CMS columns for older DBs (ensure compatibility)
-  // Step 1: Add columns
-  await pool.query(`
     ALTER TABLE cms_pages ADD COLUMN IF NOT EXISTS page_id TEXT;
     ALTER TABLE cms_pages ADD COLUMN IF NOT EXISTS page_name TEXT;
     ALTER TABLE cms_contact_submissions ADD COLUMN IF NOT EXISTS page_id TEXT;
   `);
   
-  // Step 2: Populate page_id (in separate transaction so new columns are visible)
+  // Backfill missing CMS page_id for older DBs (columns added above)
   await pool.query(`
     DO $$
     BEGIN
