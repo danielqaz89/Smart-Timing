@@ -309,8 +309,8 @@ async function initTables(){
     -- CMS Pages table (for landing page content)
     CREATE TABLE IF NOT EXISTS cms_pages (
       id SERIAL PRIMARY KEY,
-      page_id TEXT UNIQUE NOT NULL,
-      page_name TEXT NOT NULL,
+      page_id TEXT,
+      page_name TEXT,
       sections JSONB NOT NULL DEFAULT '[]'::jsonb,
       meta JSONB NOT NULL DEFAULT '{}'::jsonb,
       is_published BOOLEAN DEFAULT false,
