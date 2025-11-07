@@ -23,6 +23,7 @@ const __dirname = path.dirname(__filename);
 
 dotenv.config();
 const app = express();
+export default app; // Allow Vercel (@vercel/node) to use the Express app as a handler
 const JWT_SECRET = process.env.JWT_SECRET || 'smart-timing-secret-change-in-production';
 const ADMIN_SESSION_HOURS = 24;
 
@@ -4015,23 +4016,30 @@ process.on('SIGINT', () => gracefulShutdown('SIGINT'));
 let server;
 initTables()
   .then(() => {
-    server = app.listen(PORT, '0.0.0.0', () => {
-      serverStartTime = Date.now();
-      console.log(`🚀 Backend running on http://localhost:${PORT}`);
-      console.log(`📊 Health endpoint: http://localhost:${PORT}/api/health`);
-      console.log(`🗄️  Database: ${pool.options.connectionString.split('@')[1].split('?')[0]}`);
-      console.log(`⏱️  Started at: ${new Date().toISOString()}`);
-    });
-    
-    // Handle server errors
-    server.on('error', (error) => {
-      if (error.code === 'EADDRINUSE') {
-        console.error(`❌ Port ${PORT} is already in use`);
-        process.exit(1);
-      } else {
-        console.error('❌ Server error:', error);
-      }
-    });
+    // On Vercel (@vercel/node), the app is exported as a handler and should not call listen()
+    if (!process.env.VERCEL) {
+      server = app.listen(PORT, '0.0.0.0', () => {
+        serverStartTime = Date.now();
+        console.log(`🚀 Backend running on http://localhost:${PORT}`);
+        console.log(`📊 Health endpoint: http://localhost:${PORT}/api/health`);
+        try {
+          console.log(`🗄️  Database: ${pool.options.connectionString.split('@')[1].split('?')[0]}`);
+        } catch {}
+        console.log(`⏱️  Started at: ${new Date().toISOString()}`);
+      });
+      
+      // Handle server errors
+      server.on('error', (error) => {
+        if (error.code === 'EADDRINUSE') {
+          console.error(`❌ Port ${PORT} is already in use`);
+          process.exit(1);
+        } else {
+          console.error('❌ Server error:', error);
+        }
+      });
+    } else {
+      console.log('Vercel environment detected; exporting Express app as handler without listen()');
+    }
   })
   .catch((error) => {
     console.error('❌ Failed to initialize database:', error);

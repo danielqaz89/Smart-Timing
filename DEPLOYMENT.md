@@ -9,7 +9,39 @@ Smart Timing is a **monorepo** with two separate deployments:
 
 ---
 
-## 1. Backend Deployment (Render)
+## 1. Backend Deployment (Vercel)
+
+### Prerequisites:
+- Vercel account
+- PostgreSQL database
+
+### Steps (Vercel):
+1. Import GitHub repo into Vercel
+2. `vercel.json` is included to expose Express as serverless function
+3. Set Environment Variables:
+   ```
+   DATABASE_URL=postgresql://user:pass@host:5432/dbname
+   NODE_ENV=production
+   FRONTEND_ORIGINS=https://your-frontend.vercel.app,http://localhost:3000
+   FRONTEND_ORIGIN_SUFFIXES=.vercel.app
+   JWT_SECRET=replace-me
+   GOOGLE_CLIENT_ID=...
+   GOOGLE_CLIENT_SECRET=...
+   GOOGLE_REDIRECT_URI=https://<your-backend>.vercel.app/api/auth/google/callback
+   SMTP_HOST=... (optional)
+   SMTP_PORT=...
+   SMTP_SECURE=false
+   SMTP_USER=...
+   SMTP_PASS=...
+   ```
+4. Deploy → Validate `/api/health`
+
+### Database Setup:
+Tables are auto-created on first boot via `initTables()` in `server.js`.
+
+---
+
+## 2. Frontend Deployment (Vercel)
 
 ### Prerequisites:
 - PostgreSQL database (Neon, Render, or other)
