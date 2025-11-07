@@ -396,6 +396,17 @@ async function initTables(){
       template_type TEXT CHECK (template_type IN ('timesheet','report')) NOT NULL,
       engine TEXT DEFAULT 'html',
       template_html TEXT NOT NULL,
+      template_css TEXT,
+      is_active BOOLEAN DEFAULT TRUE,
+      created_at TIMESTAMP DEFAULT NOW(),
+      updated_at TIMESTAMP DEFAULT NOW(),
+      UNIQUE(company_id, template_type)
+    );
+      id SERIAL PRIMARY KEY,
+      company_id INT NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+      template_type TEXT CHECK (template_type IN ('timesheet','report')) NOT NULL,
+      engine TEXT DEFAULT 'html',
+      template_html TEXT NOT NULL,
       is_active BOOLEAN DEFAULT TRUE,
       created_at TIMESTAMP DEFAULT NOW(),
       updated_at TIMESTAMP DEFAULT NOW(),
@@ -466,6 +477,7 @@ async function initTables(){
     ALTER TABLE project_info ADD COLUMN IF NOT EXISTS user_id TEXT DEFAULT 'default';
     ALTER TABLE companies ADD COLUMN IF NOT EXISTS enforce_hourly_rate BOOLEAN DEFAULT FALSE;
     ALTER TABLE companies ADD COLUMN IF NOT EXISTS enforced_hourly_rate NUMERIC(10,2);
+    ALTER TABLE company_document_templates ADD COLUMN IF NOT EXISTS template_css TEXT;
     ALTER TABLE project_info ADD COLUMN IF NOT EXISTS is_active BOOLEAN DEFAULT true;
     ALTER TABLE project_info ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT NOW();
     ALTER TABLE project_info ADD COLUMN IF NOT EXISTS bedrift TEXT;
@@ -2525,22 +2537,25 @@ app.put('/api/company/policy', authenticateCompany, requireCompanyRole('admin'),
 app.get('/api/company/templates/:type', authenticateCompany, requireCompanyRole('admin'), async (req, res) => {
   try {
     const t = String(req.params.type);
-    const row = (await pool.query('SELECT template_html, is_active, updated_at FROM company_document_templates WHERE company_id = $1 AND template_type = $2', [req.companyUser.company_id, t])).rows[0];
-    res.json(row || { template_html: '<style>body{font-family:Arial}</style><h1>{{company.name}}</h1>', is_active: true });
+    const row = (await pool.query('SELECT template_html, template_css, is_active, updated_at FROM company_document_templates WHERE company_id = $1 AND template_type = $2', [req.companyUser.company_id, t])).rows[0];
+    res.json(row || { template_html: '<h1>{{company.name}}</h1>', template_css: 'body{font-family:Arial}', is_active: true });
   } catch (e) { res.status(500).json({ error: String(e) }); }
 });
 
 app.put('/api/company/templates/:type', authenticateCompany, requireCompanyRole('admin'), async (req, res) => {
   try {
     const t = String(req.params.type);
-    const { template_html, is_active } = req.body || {};
+    const { template_html, template_css, is_active } = req.body || {};
     if (!template_html) return res.status(400).json({ error: 'template_html required' });
     await pool.query(`
-      INSERT INTO company_document_templates (company_id, template_type, template_html, is_active)
-      VALUES ($1, $2, $3, COALESCE($4, TRUE))
+      INSERT INTO company_document_templates (company_id, template_type, template_html, template_css, is_active)
+      VALUES ($1, $2, $3, $4, COALESCE($5, TRUE))
       ON CONFLICT (company_id, template_type) DO UPDATE
-      SET template_html = EXCLUDED.template_html, is_active = COALESCE(EXCLUDED.is_active, company_document_templates.is_active), updated_at = NOW()
-    `, [req.companyUser.company_id, t, template_html, is_active]);
+      SET template_html = EXCLUDED.template_html,
+          template_css = EXCLUDED.template_css,
+          is_active = COALESCE(EXCLUDED.is_active, company_document_templates.is_active),
+          updated_at = NOW()
+    `, [req.companyUser.company_id, t, template_html, template_css || null, is_active]);
     res.json({ ok: true });
   } catch (e) { res.status(500).json({ error: String(e) }); }
 });
@@ -2548,14 +2563,15 @@ app.put('/api/company/templates/:type', authenticateCompany, requireCompanyRole(
 app.post('/api/company/templates/:type/preview', authenticateCompany, requireCompanyRole('admin'), async (req, res) => {
   try {
     const t = String(req.params.type);
-    const row = (await pool.query('SELECT template_html FROM company_document_templates WHERE company_id = $1 AND template_type = $2', [req.companyUser.company_id, t])).rows[0];
+    const row = (await pool.query('SELECT template_html, template_css FROM company_document_templates WHERE company_id = $1 AND template_type = $2', [req.companyUser.company_id, t])).rows[0];
     const html = String(row?.template_html || req.body?.template_html || '');
+    const css = String(row?.template_css || req.body?.template_css || '');
     if (!html) return res.status(400).json({ error: 'No template' });
-    // dynamic import handlebars
     const { default: Handlebars } = await import('handlebars');
     const tpl = Handlebars.compile(html);
-    const data = await buildTemplateData(req.companyUser.company_id, t, req.body?.month);
-    const out = tpl(data);
+    const data = await buildTemplateData(req.companyUser.company_id, t, req.body?.month, req.body?.company_user_id);
+    const body = tpl(data);
+    const out = `<style>${css}</style>\n${body}`;
     res.json({ html: out, data });
   } catch (e) { res.status(500).json({ error: String(e) }); }
 });
@@ -2563,13 +2579,14 @@ app.post('/api/company/templates/:type/preview', authenticateCompany, requireCom
 app.post('/api/company/templates/:type/pdf', authenticateCompany, requireCompanyRole('admin'), async (req, res) => {
   try {
     const t = String(req.params.type);
-    const row = (await pool.query('SELECT template_html FROM company_document_templates WHERE company_id = $1 AND template_type = $2', [req.companyUser.company_id, t])).rows[0];
+    const row = (await pool.query('SELECT template_html, template_css FROM company_document_templates WHERE company_id = $1 AND template_type = $2', [req.companyUser.company_id, t])).rows[0];
     const htmlRaw = String(row?.template_html || req.body?.template_html || '');
+    const css = String(row?.template_css || req.body?.template_css || '');
     if (!htmlRaw) return res.status(400).json({ error: 'No template' });
     const { default: Handlebars } = await import('handlebars');
     const tpl = Handlebars.compile(htmlRaw);
-    const data = await buildTemplateData(req.companyUser.company_id, t, req.body?.month);
-    const html = tpl(data);
+    const data = await buildTemplateData(req.companyUser.company_id, t, req.body?.month, req.body?.company_user_id);
+    const html = `<style>${css}</style>\n${tpl(data)}`;
     let browser;
     try {
       const { default: puppeteer } = await import('puppeteer');
@@ -2588,7 +2605,60 @@ app.post('/api/company/templates/:type/pdf', authenticateCompany, requireCompany
   } catch (e) { res.status(500).json({ error: String(e) }); }
 });
 
-async function buildTemplateData(companyId, type, month) {
+app.post('/api/company/templates/:type/send', authenticateCompany, requireCompanyRole('admin'), async (req, res) => {
+  try {
+    const t = String(req.params.type);
+    const { to, subject, message, month, company_user_id, template_html, template_css } = req.body || {};
+    if (!to) return res.status(400).json({ error: 'Missing recipient' });
+    const row = (await pool.query('SELECT template_html, template_css FROM company_document_templates WHERE company_id = $1 AND template_type = $2', [req.companyUser.company_id, t])).rows[0];
+    const htmlRaw = String(template_html || row?.template_html || '');
+    const css = String(template_css || row?.template_css || '');
+    if (!htmlRaw) return res.status(400).json({ error: 'No template' });
+    const { default: Handlebars } = await import('handlebars');
+    const tpl = Handlebars.compile(htmlRaw);
+    const data = await buildTemplateData(req.companyUser.company_id, t, month, company_user_id);
+    const html = `<style>${css}</style>\n${tpl(data)}`;
+
+    // Render to PDF
+    let browser; let pdf;
+    try {
+      const { default: puppeteer } = await import('puppeteer');
+      browser = await puppeteer.launch({ args: ['--no-sandbox','--disable-setuid-sandbox'] });
+      const page = await browser.newPage();
+      await page.setContent(html, { waitUntil: 'networkidle0' });
+      pdf = await page.pdf({ format: 'A4', printBackground: true });
+      await browser.close();
+    } catch (err) {
+      if (browser) try { await browser.close(); } catch {}
+      return res.status(501).json({ error: 'PDF rendering not available', details: String(err) });
+    }
+
+    // Email delivery
+    const toEmail = String(to);
+    const subj = subject || `${t === 'timesheet' ? 'Timeliste' : 'Rapport'} ${data.period.month_label}`;
+    const msg = message || `Vedlagt ${t === 'timesheet' ? 'timeliste' : 'rapport'} for ${data.period.month_label}.`;
+    const provider = process.env.SMTP_HOST ? {
+      host: process.env.SMTP_HOST,
+      port: Number(process.env.SMTP_PORT || 587),
+      secure: String(process.env.SMTP_SECURE || 'false').toLowerCase() === 'true',
+    } : guessSmtpByEmail(toEmail);
+    const authUser = process.env.SMTP_USER || process.env.EMAIL_FROM || 'noreply@smarttiming.no';
+    const authPass = process.env.SMTP_PASS || process.env.SMTP_APP_PASSWORD;
+    const transport = nodemailer.createTransport({ ...provider, auth: authPass ? { user: authUser, pass: authPass } : undefined });
+    const fromAddr = process.env.EMAIL_FROM || 'Smart Timing <noreply@smarttiming.no>';
+    await transport.sendMail({
+      from: fromAddr,
+      to: toEmail,
+      subject: subj,
+      text: msg,
+      attachments: [{ filename: `${t}.pdf`, content: pdf, contentType: 'application/pdf' }],
+    });
+
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: String(e) }); }
+});
+
+async function buildTemplateData(companyId, type, month, companyUserId) {
   const company = (await pool.query('SELECT name, logo_base64, enforce_hourly_rate, enforced_hourly_rate FROM companies WHERE id = $1', [companyId])).rows[0] || {};
   const m = month && /^\d{6}$/.test(String(month)) ? String(month) : new Date().toISOString().slice(0,7).replace('-','');
   // totals per case
@@ -2597,17 +2667,17 @@ async function buildTemplateData(companyId, type, month) {
            ROUND(SUM(EXTRACT(EPOCH FROM (lr.end_time - lr.start_time)) / 3600.0 - COALESCE(lr.break_hours,0))::numeric, 2) AS hours
     FROM log_row lr
     JOIN company_users cu ON cu.id = lr.company_user_id
-    WHERE cu.company_id = $1 AND to_char(lr.date,'YYYYMM') = $2 AND lr.case_id IS NOT NULL
+    WHERE cu.company_id = $1 AND to_char(lr.date,'YYYYMM') = $2 AND lr.case_id IS NOT NULL ${companyUserId ? 'AND lr.company_user_id = $3' : ''}
     GROUP BY lr.case_id
     ORDER BY lr.case_id ASC
-  `, [companyId, m])).rows;
+  `, companyUserId ? [companyId, m, companyUserId] : [companyId, m])).rows;
   // rows (sample limited)
   const rows = (await pool.query(`
     SELECT lr.*, cu.user_email
     FROM log_row lr JOIN company_users cu ON cu.id = lr.company_user_id
-    WHERE cu.company_id = $1 AND to_char(lr.date,'YYYYMM') = $2
+    WHERE cu.company_id = $1 AND to_char(lr.date,'YYYYMM') = $2 ${companyUserId ? 'AND lr.company_user_id = $3' : ''}
     ORDER BY lr.date ASC, lr.start_time ASC LIMIT 500
-  `, [companyId, m])).rows.map(r => ({
+  `, companyUserId ? [companyId, m, companyUserId] : [companyId, m])).rows.map(r => ({
     date: r.date,
     start: String(r.start_time).slice(0,5),
     end: String(r.end_time).slice(0,5),
