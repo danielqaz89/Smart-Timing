@@ -472,11 +472,18 @@ async function initTables(){
   // Backfill missing CMS columns for older DBs (ensure compatibility)
   await pool.query(`
     ALTER TABLE cms_pages ADD COLUMN IF NOT EXISTS page_id TEXT;
+    ALTER TABLE cms_pages ADD COLUMN IF NOT EXISTS page_name TEXT;
     ALTER TABLE cms_contact_submissions ADD COLUMN IF NOT EXISTS page_id TEXT;
 
-    UPDATE cms_pages
-    SET page_id = lower(regexp_replace(coalesce(page_name, id::text), '[^a-z0-9]+', '-', 'g'))
-    WHERE (page_id IS NULL OR page_id = '');
+    -- Populate page_id only if the table exists and has rows
+    DO $$
+    BEGIN
+      IF EXISTS (SELECT 1 FROM cms_pages LIMIT 1) THEN
+        UPDATE cms_pages
+        SET page_id = lower(regexp_replace(coalesce(page_name, id::text), '[^a-z0-9]+', '-', 'g'))
+        WHERE (page_id IS NULL OR page_id = '');
+      END IF;
+    END $$;
   `);
   
   // Create indexes (after columns exist)
