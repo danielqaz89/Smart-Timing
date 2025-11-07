@@ -2140,6 +2140,60 @@ app.get("/api/admin/profile", authenticateAdmin, async (req, res) => {
   }
 });
 
+// PUT /api/admin/profile/password - Change admin password
+app.put("/api/admin/profile/password", authenticateAdmin, async (req, res) => {
+  try {
+    const { currentPassword, newPassword } = req.body;
+    
+    if (!currentPassword || !newPassword) {
+      return res.status(400).json({ error: 'Current password and new password required' });
+    }
+    
+    if (newPassword.length < 6) {
+      return res.status(400).json({ error: 'New password must be at least 6 characters' });
+    }
+    
+    // Fetch current admin
+    const result = await pool.query(
+      'SELECT id, password_hash FROM admin_users WHERE id = $1',
+      [req.adminUser.id]
+    );
+    
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Admin not found' });
+    }
+    
+    const admin = result.rows[0];
+    
+    // Verify current password
+    const validPassword = await bcrypt.compare(currentPassword, admin.password_hash);
+    if (!validPassword) {
+      return res.status(401).json({ error: 'Current password is incorrect' });
+    }
+    
+    // Hash new password and update
+    const newPasswordHash = await bcrypt.hash(newPassword, 10);
+    await pool.query(
+      'UPDATE admin_users SET password_hash = $1, updated_at = NOW() WHERE id = $2',
+      [newPasswordHash, admin.id]
+    );
+    
+    await logAdminAction(
+      req.adminUser.id,
+      'password_changed',
+      'admin_user',
+      admin.id,
+      {},
+      req.ip
+    );
+    
+    res.json({ success: true, message: 'Password updated successfully' });
+  } catch (e) {
+    console.error('Password change error:', e);
+    res.status(500).json({ error: 'Password change failed', details: String(e) });
+  }
+});
+
 
 
 
