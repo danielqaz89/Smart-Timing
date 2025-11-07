@@ -351,6 +351,61 @@ async function initTables(){
       uploaded_by INT REFERENCES admin_users(id),
       created_at TIMESTAMP DEFAULT NOW()
     );
+    
+    -- CMS Contact Submissions table (for landing page contact form)
+    CREATE TABLE IF NOT EXISTS cms_contact_submissions (
+      id SERIAL PRIMARY KEY,
+      page_id TEXT NOT NULL,
+      form_id TEXT,
+      fields JSONB NOT NULL,
+      ip_address TEXT,
+      user_agent TEXT,
+      status TEXT CHECK (status IN ('new', 'processed', 'error')) DEFAULT 'new',
+      error_message TEXT,
+      created_at TIMESTAMP DEFAULT NOW(),
+      updated_at TIMESTAMP DEFAULT NOW()
+    );
+    
+    -- Company Requests table (for public company registration requests)
+    CREATE TABLE IF NOT EXISTS company_requests (
+      id SERIAL PRIMARY KEY,
+      name TEXT NOT NULL,
+      orgnr TEXT,
+      contact_email TEXT,
+      contact_phone TEXT,
+      address_line TEXT,
+      postal_code TEXT,
+      city TEXT,
+      requester_email TEXT,
+      status TEXT CHECK (status IN ('pending', 'approved', 'rejected')) DEFAULT 'pending',
+      notes TEXT,
+      processed_by INT REFERENCES admin_users(id),
+      processed_at TIMESTAMP,
+      created_at TIMESTAMP DEFAULT NOW()
+    );
+    
+    -- Company Users table (multi-tenant company membership)
+    CREATE TABLE IF NOT EXISTS company_users (
+      id SERIAL PRIMARY KEY,
+      company_id INT NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+      user_email TEXT NOT NULL,
+      google_email TEXT,
+      role TEXT CHECK (role IN ('member', 'admin')) DEFAULT 'member',
+      approved BOOLEAN DEFAULT false,
+      created_at TIMESTAMP DEFAULT NOW(),
+      updated_at TIMESTAMP DEFAULT NOW(),
+      UNIQUE(company_id, user_email)
+    );
+    
+    -- Company User Cases table (assign cases to company users)
+    CREATE TABLE IF NOT EXISTS company_user_cases (
+      id SERIAL PRIMARY KEY,
+      company_user_id INT NOT NULL REFERENCES company_users(id) ON DELETE CASCADE,
+      case_id TEXT NOT NULL,
+      notes TEXT,
+      created_at TIMESTAMP DEFAULT NOW(),
+      UNIQUE(company_user_id, case_id)
+    );
   `);
   
   // CMS translations table
@@ -467,6 +522,12 @@ async function initTables(){
     CREATE INDEX IF NOT EXISTS idx_cms_translations_category ON cms_translations(category);
     CREATE INDEX IF NOT EXISTS idx_cms_media_uploaded_by ON cms_media(uploaded_by, created_at DESC);
     CREATE INDEX IF NOT EXISTS idx_cms_media_file_type ON cms_media(file_type);
+    CREATE INDEX IF NOT EXISTS idx_cms_contact_submissions_status ON cms_contact_submissions(status, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_cms_contact_submissions_page_id ON cms_contact_submissions(page_id);
+    CREATE INDEX IF NOT EXISTS idx_company_requests_status ON company_requests(status, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_company_users_company ON company_users(company_id, approved);
+    CREATE INDEX IF NOT EXISTS idx_company_users_email ON company_users(user_email);
+    CREATE INDEX IF NOT EXISTS idx_company_user_cases_company_user ON company_user_cases(company_user_id);
   `);
   console.log("✅ Tables initialized with persistence schema");
   
@@ -3233,6 +3294,499 @@ app.delete("/api/admin/cms/media/:id", authenticateAdmin, requireAdminRole('supe
   } catch (e) {
     console.error('CMS media deletion error:', e);
     res.status(500).json({ error: 'Failed to delete media', details: String(e) });
+  }
+});
+
+// ===== CMS CONTACT FORM ENDPOINTS =====
+// POST /api/cms/contact/submit - Public contact form submission
+app.post("/api/cms/contact/submit", async (req, res) => {
+  try {
+    const { page_id = 'landing', form_id = 'contact', values } = req.body;
+    const ip_address = req.ip || req.headers['x-forwarded-for'] || req.connection.remoteAddress;
+    const user_agent = req.headers['user-agent'];
+    
+    if (!values || typeof values !== 'object') {
+      return res.status(400).json({ error: 'Validation failed: values required' });
+    }
+    
+    // Honeypot check - if 'hp' field is filled, it's likely a bot
+    if (values.hp) {
+      console.log('Honeypot triggered, skipping submission');
+      return res.json({ success: true, submission_id: null, message: 'Submission received' });
+    }
+    
+    // Fetch page content to validate against form field definitions
+    const pageResult = await pool.query('SELECT content FROM cms_pages WHERE page_id = $1', [page_id]);
+    if (pageResult.rows.length === 0) {
+      return res.status(404).json({ error: 'Page not found' });
+    }
+    
+    const pageContent = pageResult.rows[0].content;
+    const formSection = pageContent.sections?.find(s => s.type === 'form' && s.form_id === form_id);
+    
+    if (!formSection) {
+      return res.status(404).json({ error: 'Form not found' });
+    }
+    
+    // Validate fields
+    const errors = [];
+    const cleanValues = {};
+    
+    for (const fieldDef of formSection.fields || []) {
+      const { name, required, type } = fieldDef;
+      const value = values[name];
+      
+      // Check required
+      if (required && (!value || (typeof value === 'string' && !value.trim()))) {
+        errors.push(`${name} is required`);
+        continue;
+      }
+      
+      // Type validation
+      if (value) {
+        if (type === 'email') {
+          const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+          if (!emailRegex.test(value)) {
+            errors.push(`${name} must be a valid email`);
+          }
+        }
+        if (type === 'checkbox') {
+          cleanValues[name] = !!value;
+        } else {
+          cleanValues[name] = String(value).trim();
+        }
+      }
+    }
+    
+    if (errors.length > 0) {
+      return res.status(400).json({ error: 'Validation failed', errors });
+    }
+    
+    // Insert submission
+    const result = await pool.query(
+      `INSERT INTO cms_contact_submissions (page_id, form_id, fields, ip_address, user_agent, status)
+       VALUES ($1, $2, $3, $4, $5, 'new')
+       RETURNING id`,
+      [page_id, form_id, JSON.stringify(cleanValues), ip_address, user_agent]
+    );
+    
+    const submission_id = result.rows[0].id;
+    
+    // Optional webhook notification
+    let webhookStatus = null;
+    if (process.env.CONTACT_WEBHOOK_URL) {
+      try {
+        const webhookRes = await fetch(process.env.CONTACT_WEBHOOK_URL, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ submission_id, page_id, form_id, fields: cleanValues, ip_address, created_at: new Date().toISOString() }),
+        });
+        webhookStatus = webhookRes.ok ? 'success' : 'error';
+        await pool.query(
+          `INSERT INTO sync_log (user_id, sync_type, status, row_count, error_message)
+           VALUES ('system', 'webhook_send', $1, 1, $2)`,
+          [webhookStatus, webhookRes.ok ? null : `HTTP ${webhookRes.status}`]
+        );
+      } catch (webhookErr) {
+        console.error('Webhook error:', webhookErr);
+        webhookStatus = 'error';
+        await pool.query(
+          `INSERT INTO sync_log (user_id, sync_type, status, row_count, error_message)
+           VALUES ('system', 'webhook_send', 'error', 1, $1)`,
+          [String(webhookErr)]
+        );
+      }
+    }
+    
+    res.json({ success: true, submission_id, webhook_status: webhookStatus, message: formSection.success_message || 'Thank you for your submission!' });
+  } catch (e) {
+    console.error('Contact form submission error:', e);
+    res.status(500).json({ error: 'Failed to submit form', details: String(e) });
+  }
+});
+
+// GET /api/admin/cms/contact/submissions - List contact form submissions (admin)
+app.get("/api/admin/cms/contact/submissions", authenticateAdmin, requireAdminRole('super_admin', 'admin', 'moderator'), async (req, res) => {
+  try {
+    const { page_id, status, limit = 100 } = req.query;
+    
+    let query = 'SELECT * FROM cms_contact_submissions WHERE 1=1';
+    const params = [];
+    
+    if (page_id) {
+      params.push(page_id);
+      query += ` AND page_id = $${params.length}`;
+    }
+    
+    if (status) {
+      params.push(status);
+      query += ` AND status = $${params.length}`;
+    }
+    
+    params.push(limit);
+    query += ` ORDER BY created_at DESC LIMIT $${params.length}`;
+    
+    const result = await pool.query(query, params);
+    res.json(result.rows);
+  } catch (e) {
+    console.error('Contact submissions fetch error:', e);
+    res.status(500).json({ error: 'Failed to fetch submissions', details: String(e) });
+  }
+});
+
+// PATCH /api/admin/cms/contact/submissions/:id - Update submission status
+app.patch("/api/admin/cms/contact/submissions/:id", authenticateAdmin, requireAdminRole('super_admin', 'admin', 'moderator'), async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { status, error_message } = req.body;
+    
+    if (status && !['new', 'processed', 'error'].includes(status)) {
+      return res.status(400).json({ error: 'Invalid status' });
+    }
+    
+    const result = await pool.query(
+      `UPDATE cms_contact_submissions
+       SET status = COALESCE($1, status),
+           error_message = COALESCE($2, error_message),
+           updated_at = NOW()
+       WHERE id = $3
+       RETURNING *`,
+      [status, error_message, id]
+    );
+    
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Submission not found' });
+    }
+    
+    await logAdminAction(
+      req.adminUser.id,
+      'cms_contact_submission_updated',
+      'cms_contact_submissions',
+      id,
+      { status, error_message },
+      req.ip
+    );
+    
+    res.json(result.rows[0]);
+  } catch (e) {
+    console.error('Contact submission update error:', e);
+    res.status(500).json({ error: 'Failed to update submission', details: String(e) });
+  }
+});
+
+// ===== COMPANY REQUESTS ENDPOINTS =====
+// POST /api/company-requests - Public company registration request
+app.post("/api/company-requests", async (req, res) => {
+  try {
+    const { name, orgnr, contact_email, contact_phone, address_line, postal_code, city, requester_email } = req.body;
+    
+    if (!name) {
+      return res.status(400).json({ error: 'Company name is required' });
+    }
+    
+    const result = await pool.query(
+      `INSERT INTO company_requests (name, orgnr, contact_email, contact_phone, address_line, postal_code, city, requester_email, status)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'pending')
+       RETURNING id`,
+      [name, orgnr, contact_email, contact_phone, address_line, postal_code, city, requester_email]
+    );
+    
+    res.json({ success: true, request_id: result.rows[0].id, message: 'Company request submitted successfully' });
+  } catch (e) {
+    console.error('Company request submission error:', e);
+    res.status(500).json({ error: 'Failed to submit company request', details: String(e) });
+  }
+});
+
+// GET /api/admin/company-requests - List company requests (admin)
+app.get("/api/admin/company-requests", authenticateAdmin, requireAdminRole('super_admin', 'admin'), async (req, res) => {
+  try {
+    const { status = 'pending' } = req.query;
+    
+    let query = 'SELECT cr.*, au.username as processed_by_username FROM company_requests cr LEFT JOIN admin_users au ON au.id = cr.processed_by';
+    const params = [];
+    
+    if (status && status !== 'all') {
+      params.push(status);
+      query += ` WHERE cr.status = $${params.length}`;
+    }
+    
+    query += ' ORDER BY cr.created_at DESC';
+    
+    const result = await pool.query(query, params);
+    res.json(result.rows);
+  } catch (e) {
+    console.error('Company requests fetch error:', e);
+    res.status(500).json({ error: 'Failed to fetch company requests', details: String(e) });
+  }
+});
+
+// PATCH /api/admin/company-requests/:id - Approve/reject company request
+app.patch("/api/admin/company-requests/:id", authenticateAdmin, requireAdminRole('super_admin', 'admin'), async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { status, notes } = req.body;
+    
+    if (!status || !['approved', 'rejected'].includes(status)) {
+      return res.status(400).json({ error: 'Invalid status. Must be approved or rejected' });
+    }
+    
+    // Get request details
+    const request = await pool.query('SELECT * FROM company_requests WHERE id = $1', [id]);
+    if (request.rows.length === 0) {
+      return res.status(404).json({ error: 'Request not found' });
+    }
+    
+    // Update request status
+    await pool.query(
+      `UPDATE company_requests
+       SET status = $1, notes = COALESCE($2, notes), processed_by = $3, processed_at = NOW()
+       WHERE id = $4`,
+      [status, notes, req.adminUser.id, id]
+    );
+    
+    // If approved, create company
+    if (status === 'approved') {
+      const { name, orgnr, contact_email, contact_phone, address_line, postal_code, city } = request.rows[0];
+      await pool.query(
+        `INSERT INTO companies (name, orgnr, contact_email, contact_phone, address_line, postal_code, city, display_order)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, 0)
+         ON CONFLICT (name) DO NOTHING`,
+        [name, orgnr, contact_email, contact_phone, address_line, postal_code, city]
+      );
+    }
+    
+    await logAdminAction(
+      req.adminUser.id,
+      `company_request_${status}`,
+      'company_requests',
+      id,
+      { status, notes, company_name: request.rows[0].name },
+      req.ip
+    );
+    
+    res.json({ success: true, status, message: `Company request ${status}` });
+  } catch (e) {
+    console.error('Company request update error:', e);
+    res.status(500).json({ error: 'Failed to update company request', details: String(e) });
+  }
+});
+
+// ===== COMPANY USER MANAGEMENT ENDPOINTS =====
+// GET /api/admin/companies/:companyId/users - List company users
+app.get("/api/admin/companies/:companyId/users", authenticateAdmin, requireAdminRole('super_admin', 'admin'), async (req, res) => {
+  try {
+    const { companyId } = req.params;
+    
+    const usersResult = await pool.query(
+      `SELECT cu.id, cu.user_email, cu.google_email, cu.role, cu.approved, cu.created_at, cu.updated_at
+       FROM company_users cu
+       WHERE cu.company_id = $1
+       ORDER BY cu.created_at DESC`,
+      [companyId]
+    );
+    
+    // Fetch cases for each user
+    const usersWithCases = await Promise.all(
+      usersResult.rows.map(async (user) => {
+        const casesResult = await pool.query(
+          'SELECT id, case_id, notes, created_at FROM company_user_cases WHERE company_user_id = $1 ORDER BY created_at DESC',
+          [user.id]
+        );
+        return { ...user, cases: casesResult.rows };
+      })
+    );
+    
+    res.json({ users: usersWithCases });
+  } catch (e) {
+    console.error('Company users fetch error:', e);
+    res.status(500).json({ error: 'Failed to fetch company users', details: String(e) });
+  }
+});
+
+// POST /api/admin/companies/:companyId/users - Add company user
+app.post("/api/admin/companies/:companyId/users", authenticateAdmin, requireAdminRole('super_admin', 'admin'), async (req, res) => {
+  try {
+    const { companyId } = req.params;
+    const { user_email, google_email, role = 'member', approved = false } = req.body;
+    
+    if (!user_email) {
+      return res.status(400).json({ error: 'user_email is required' });
+    }
+    
+    const result = await pool.query(
+      `INSERT INTO company_users (company_id, user_email, google_email, role, approved)
+       VALUES ($1, $2, $3, $4, $5)
+       ON CONFLICT (company_id, user_email) DO UPDATE
+       SET google_email = EXCLUDED.google_email,
+           role = EXCLUDED.role,
+           approved = EXCLUDED.approved,
+           updated_at = NOW()
+       RETURNING *`,
+      [companyId, user_email, google_email, role, approved]
+    );
+    
+    await logAdminAction(
+      req.adminUser.id,
+      'company_user_added',
+      'company_users',
+      result.rows[0].id,
+      { company_id: companyId, user_email },
+      req.ip
+    );
+    
+    res.json(result.rows[0]);
+  } catch (e) {
+    console.error('Company user add error:', e);
+    res.status(500).json({ error: 'Failed to add company user', details: String(e) });
+  }
+});
+
+// PATCH /api/admin/companies/:companyId/users/:userId - Update company user
+app.patch("/api/admin/companies/:companyId/users/:userId", authenticateAdmin, requireAdminRole('super_admin', 'admin'), async (req, res) => {
+  try {
+    const { companyId, userId } = req.params;
+    const { google_email, role, approved } = req.body;
+    
+    const result = await pool.query(
+      `UPDATE company_users
+       SET google_email = COALESCE($1, google_email),
+           role = COALESCE($2, role),
+           approved = COALESCE($3, approved),
+           updated_at = NOW()
+       WHERE id = $4 AND company_id = $5
+       RETURNING *`,
+      [google_email, role, approved, userId, companyId]
+    );
+    
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Company user not found' });
+    }
+    
+    await logAdminAction(
+      req.adminUser.id,
+      'company_user_updated',
+      'company_users',
+      userId,
+      { company_id: companyId, changes: { google_email, role, approved } },
+      req.ip
+    );
+    
+    res.json(result.rows[0]);
+  } catch (e) {
+    console.error('Company user update error:', e);
+    res.status(500).json({ error: 'Failed to update company user', details: String(e) });
+  }
+});
+
+// DELETE /api/admin/companies/:companyId/users/:userId - Remove company user
+app.delete("/api/admin/companies/:companyId/users/:userId", authenticateAdmin, requireAdminRole('super_admin', 'admin'), async (req, res) => {
+  try {
+    const { companyId, userId } = req.params;
+    
+    const result = await pool.query(
+      'DELETE FROM company_users WHERE id = $1 AND company_id = $2 RETURNING user_email',
+      [userId, companyId]
+    );
+    
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Company user not found' });
+    }
+    
+    await logAdminAction(
+      req.adminUser.id,
+      'company_user_deleted',
+      'company_users',
+      userId,
+      { company_id: companyId, user_email: result.rows[0].user_email },
+      req.ip
+    );
+    
+    res.json({ success: true });
+  } catch (e) {
+    console.error('Company user deletion error:', e);
+    res.status(500).json({ error: 'Failed to delete company user', details: String(e) });
+  }
+});
+
+// POST /api/admin/companies/:companyId/users/:userId/cases - Add case to user
+app.post("/api/admin/companies/:companyId/users/:userId/cases", authenticateAdmin, requireAdminRole('super_admin', 'admin'), async (req, res) => {
+  try {
+    const { companyId, userId } = req.params;
+    const { case_id, notes } = req.body;
+    
+    if (!case_id) {
+      return res.status(400).json({ error: 'case_id is required' });
+    }
+    
+    // Verify user belongs to company
+    const userCheck = await pool.query(
+      'SELECT id FROM company_users WHERE id = $1 AND company_id = $2',
+      [userId, companyId]
+    );
+    
+    if (userCheck.rows.length === 0) {
+      return res.status(404).json({ error: 'Company user not found' });
+    }
+    
+    const result = await pool.query(
+      `INSERT INTO company_user_cases (company_user_id, case_id, notes)
+       VALUES ($1, $2, $3)
+       ON CONFLICT (company_user_id, case_id) DO UPDATE
+       SET notes = EXCLUDED.notes
+       RETURNING *`,
+      [userId, case_id, notes]
+    );
+    
+    await logAdminAction(
+      req.adminUser.id,
+      'company_user_case_added',
+      'company_user_cases',
+      result.rows[0].id,
+      { company_id: companyId, user_id: userId, case_id },
+      req.ip
+    );
+    
+    res.json(result.rows[0]);
+  } catch (e) {
+    console.error('Company user case add error:', e);
+    res.status(500).json({ error: 'Failed to add case', details: String(e) });
+  }
+});
+
+// DELETE /api/admin/companies/:companyId/users/:userId/cases/:caseRowId - Remove case from user
+app.delete("/api/admin/companies/:companyId/users/:userId/cases/:caseRowId", authenticateAdmin, requireAdminRole('super_admin', 'admin'), async (req, res) => {
+  try {
+    const { companyId, userId, caseRowId } = req.params;
+    
+    // Verify user belongs to company and case belongs to user
+    const caseCheck = await pool.query(
+      `SELECT cuc.id, cuc.case_id
+       FROM company_user_cases cuc
+       JOIN company_users cu ON cu.id = cuc.company_user_id
+       WHERE cuc.id = $1 AND cu.id = $2 AND cu.company_id = $3`,
+      [caseRowId, userId, companyId]
+    );
+    
+    if (caseCheck.rows.length === 0) {
+      return res.status(404).json({ error: 'Case not found' });
+    }
+    
+    await pool.query('DELETE FROM company_user_cases WHERE id = $1', [caseRowId]);
+    
+    await logAdminAction(
+      req.adminUser.id,
+      'company_user_case_deleted',
+      'company_user_cases',
+      caseRowId,
+      { company_id: companyId, user_id: userId, case_id: caseCheck.rows[0].case_id },
+      req.ip
+    );
+    
+    res.json({ success: true });
+  } catch (e) {
+    console.error('Company user case deletion error:', e);
+    res.status(500).json({ error: 'Failed to delete case', details: String(e) });
   }
 });
 
