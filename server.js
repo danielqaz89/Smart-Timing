@@ -458,6 +458,8 @@ async function initTables(){
     ALTER TABLE log_row ADD COLUMN IF NOT EXISTS expense_coverage NUMERIC(10,2) DEFAULT 0;
     ALTER TABLE log_row ADD COLUMN IF NOT EXISTS is_archived BOOLEAN DEFAULT false;
     ALTER TABLE log_row ADD COLUMN IF NOT EXISTS archived_at TIMESTAMP;
+    ALTER TABLE log_row ADD COLUMN IF NOT EXISTS case_id TEXT;
+    ALTER TABLE log_row ADD COLUMN IF NOT EXISTS company_user_id INT REFERENCES company_users(id) ON DELETE SET NULL;
     ALTER TABLE user_settings ADD COLUMN IF NOT EXISTS invoice_reminder_active BOOLEAN DEFAULT false;
     ALTER TABLE user_settings ADD COLUMN IF NOT EXISTS theme_mode TEXT DEFAULT 'dark';
     ALTER TABLE user_settings ADD COLUMN IF NOT EXISTS view_mode TEXT DEFAULT 'month';
@@ -481,6 +483,8 @@ async function initTables(){
     CREATE INDEX IF NOT EXISTS idx_log_row_user ON log_row(user_id, date DESC);
     CREATE INDEX IF NOT EXISTS idx_log_row_stamped ON log_row(user_id, is_stamped_in) WHERE is_stamped_in = true;
     CREATE INDEX IF NOT EXISTS idx_log_row_archived ON log_row(user_id, is_archived) WHERE is_archived = false;
+    CREATE INDEX IF NOT EXISTS idx_log_row_case ON log_row(case_id) WHERE case_id IS NOT NULL;
+    CREATE INDEX IF NOT EXISTS idx_log_row_company_user ON log_row(company_user_id, date DESC) WHERE company_user_id IS NOT NULL;
     CREATE INDEX IF NOT EXISTS idx_user_settings_user_id ON user_settings(user_id);
     CREATE INDEX IF NOT EXISTS idx_project_info_user_active ON project_info(user_id, is_active);
     CREATE INDEX IF NOT EXISTS idx_quick_templates_user ON quick_templates(user_id, display_order);
@@ -832,11 +836,13 @@ app.post("/api/timesheet/send-gmail", async (req, res) => {
 });
 
 app.post("/api/logs",async(req,r)=>{
-  const {date,start,end,breakHours,activity,title,project,place,notes,expenseCoverage}=req.body;
+  const {date,start,end,breakHours,activity,title,project,place,notes,expenseCoverage, case_id, caseId, company_user_id}=req.body || {};
+  const resolvedCaseId = case_id ?? caseId ?? null;
+  const resolvedCompanyUserId = company_user_id ?? null;
   const res=await pool.query(
-    `INSERT INTO log_row (date,start_time,end_time,break_hours,activity,title,project,place,notes,expense_coverage)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING *`,
-    [date,start,end,breakHours,activity,title,project,place,notes,expenseCoverage||0]
+    `INSERT INTO log_row (date,start_time,end_time,break_hours,activity,title,project,place,notes,expense_coverage,case_id,company_user_id)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) RETURNING *`,
+    [date,start,end,breakHours,activity,title,project,place,notes,expenseCoverage||0, resolvedCaseId, resolvedCompanyUserId]
   );
   r.json(res.rows[0]);
 });
@@ -857,6 +863,8 @@ app.put("/api/logs/:id", async (req, res) => {
   if (b.place !== undefined) add("place", b.place);
   if (b.notes !== undefined) add("notes", b.notes);
   if (b.expenseCoverage !== undefined) add("expense_coverage", b.expenseCoverage);
+  if (b.case_id !== undefined || b.caseId !== undefined) add("case_id", b.case_id ?? b.caseId);
+  if (b.company_user_id !== undefined) add("company_user_id", b.company_user_id);
   if (!sets.length) return res.status(400).json({ error: "No fields to update" });
   values.push(req.params.id);
   const q = `UPDATE log_row SET ${sets.join(",")} WHERE id=$${values.length} RETURNING *`;
@@ -871,7 +879,7 @@ app.post("/api/logs/bulk", async (req, res) => {
   const values = [];
   const placeholders = rows
     .map((row, i) => {
-      const base = i * 10;
+      const base = i * 13;
       values.push(
         row.date,
         row.start,
@@ -882,12 +890,14 @@ app.post("/api/logs/bulk", async (req, res) => {
         row.project ?? null,
         row.place ?? null,
         row.notes ?? null,
-        row.expenseCoverage ?? 0
+        row.expenseCoverage ?? 0,
+        row.case_id ?? row.caseId ?? null,
+        row.company_user_id ?? null
       );
-      return `($${base + 1},$${base + 2},$${base + 3},$${base + 4},$${base + 5},$${base + 6},$${base + 7},$${base + 8},$${base + 9},$${base + 10})`;
+      return `($${base + 1},$${base + 2},$${base + 3},$${base + 4},$${base + 5},$${base + 6},$${base + 7},$${base + 8},$${base + 9},$${base + 10},$${base + 11},$${base + 12},$${base + 13})`;
     })
     .join(",");
-  const q = `INSERT INTO log_row (date,start_time,end_time,break_hours,activity,title,project,place,notes,expense_coverage) VALUES ${placeholders} RETURNING id`;
+  const q = `INSERT INTO log_row (date,start_time,end_time,break_hours,activity,title,project,place,notes,expense_coverage,case_id,company_user_id) VALUES ${placeholders} RETURNING id`;
   const result = await pool.query(q, values);
   res.json({ inserted: result.rowCount });
 });
