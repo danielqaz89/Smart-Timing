@@ -467,9 +467,32 @@ async function initTables(){
     ALTER TABLE user_settings ADD COLUMN IF NOT EXISTS google_access_token TEXT;
     ALTER TABLE user_settings ADD COLUMN IF NOT EXISTS google_refresh_token TEXT;
     ALTER TABLE user_settings ADD COLUMN IF NOT EXISTS google_token_expiry TIMESTAMP;
+
+    -- Ensure CMS tables have columns required by indexes and code (legacy DB compat)
     ALTER TABLE cms_pages ADD COLUMN IF NOT EXISTS page_id TEXT;
     ALTER TABLE cms_pages ADD COLUMN IF NOT EXISTS page_name TEXT;
+    ALTER TABLE cms_pages ADD COLUMN IF NOT EXISTS is_published BOOLEAN DEFAULT false;
+    ALTER TABLE cms_pages ADD COLUMN IF NOT EXISTS sections JSONB;
+    ALTER TABLE cms_pages ADD COLUMN IF NOT EXISTS meta JSONB;
+    ALTER TABLE cms_pages ADD COLUMN IF NOT EXISTS updated_by INT;
+    ALTER TABLE cms_pages ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT NOW();
+    ALTER TABLE cms_pages ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT NOW();
+
     ALTER TABLE cms_contact_submissions ADD COLUMN IF NOT EXISTS page_id TEXT;
+    ALTER TABLE cms_contact_submissions ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'new';
+    ALTER TABLE cms_contact_submissions ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT NOW();
+    ALTER TABLE cms_contact_submissions ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT NOW();
+
+    ALTER TABLE cms_themes ADD COLUMN IF NOT EXISTS theme_id TEXT;
+    ALTER TABLE cms_themes ADD COLUMN IF NOT EXISTS theme_type TEXT;
+    ALTER TABLE cms_themes ADD COLUMN IF NOT EXISTS company_id INT;
+
+    ALTER TABLE cms_translations ADD COLUMN IF NOT EXISTS translation_key TEXT;
+    ALTER TABLE cms_translations ADD COLUMN IF NOT EXISTS category TEXT;
+
+    ALTER TABLE cms_media ADD COLUMN IF NOT EXISTS uploaded_by INT;
+    ALTER TABLE cms_media ADD COLUMN IF NOT EXISTS file_type TEXT;
+    ALTER TABLE cms_media ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT NOW();
   `);
   
   // Backfill missing CMS page_id for older DBs (columns added above)
