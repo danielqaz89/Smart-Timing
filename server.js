@@ -2576,6 +2576,31 @@ app.delete('/api/company/users/:id/cases/:caseId', authenticateCompany, requireC
   } catch (e) { res.status(500).json({ error: String(e) }); }
 });
 
+// Company logs - list logs across company with optional filters
+app.get('/api/company/logs', authenticateCompany, async (req, res) => {
+  try {
+    const { case_id, from, to, user_id, limit = 200, offset = 0 } = req.query || {};
+    const params = [req.companyUser.company_id];
+    let where = 'WHERE cu.company_id = $1';
+    if (case_id) { params.push(String(case_id)); where += ` AND lr.case_id = $${params.length}`; }
+    if (user_id) { params.push(Number(user_id)); where += ` AND lr.company_user_id = $${params.length}`; }
+    if (from) { params.push(new Date(String(from))); where += ` AND lr.date >= $${params.length}`; }
+    if (to) { params.push(new Date(String(to))); where += ` AND lr.date <= $${params.length}`; }
+    params.push(Number(limit), Number(offset));
+
+    const sql = `
+      SELECT lr.*, cu.user_email, cu.google_email
+      FROM log_row lr
+      JOIN company_users cu ON cu.id = lr.company_user_id
+      ${where}
+      ORDER BY lr.date DESC, lr.start_time DESC
+      LIMIT $${params.length-1} OFFSET $${params.length}
+    `;
+    const rows = (await pool.query(sql, params)).rows;
+    res.json({ logs: rows });
+  } catch (e) { res.status(500).json({ error: String(e) }); }
+});
+
 // Company invites
 app.get('/api/company/invites', authenticateCompany, requireCompanyRole('admin'), async (req, res) => {
   try {
