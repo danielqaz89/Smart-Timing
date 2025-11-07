@@ -541,8 +541,7 @@ async function initTables(){
     CREATE INDEX IF NOT EXISTS idx_admin_audit_log_admin ON admin_audit_log(admin_id, created_at DESC);
     CREATE INDEX IF NOT EXISTS idx_admin_audit_log_action ON admin_audit_log(action, created_at DESC);
     CREATE INDEX IF NOT EXISTS idx_system_settings_key ON system_settings(setting_key);
-    CREATE INDEX IF NOT EXISTS idx_cms_pages_page_id ON cms_pages(page_id);
-    CREATE INDEX IF NOT EXISTS idx_cms_pages_published ON cms_pages(is_published);
+    -- Moved cms_pages indexes to guarded creation below
     CREATE INDEX IF NOT EXISTS idx_cms_themes_theme_id ON cms_themes(theme_id);
     CREATE INDEX IF NOT EXISTS idx_cms_themes_type_company ON cms_themes(theme_type, company_id) WHERE theme_type = 'company';
     CREATE INDEX IF NOT EXISTS idx_cms_translations_key ON cms_translations(translation_key);
@@ -550,8 +549,36 @@ async function initTables(){
     CREATE INDEX IF NOT EXISTS idx_cms_media_uploaded_by ON cms_media(uploaded_by, created_at DESC);
     CREATE INDEX IF NOT EXISTS idx_cms_media_file_type ON cms_media(file_type);
     CREATE INDEX IF NOT EXISTS idx_cms_contact_submissions_status ON cms_contact_submissions(status, created_at DESC);
-    CREATE INDEX IF NOT EXISTS idx_cms_contact_submissions_page_id ON cms_contact_submissions(page_id);
+    -- Moved cms_contact_submissions(page_id) to guarded creation below
     CREATE INDEX IF NOT EXISTS idx_company_requests_status ON company_requests(status, created_at DESC);
+  `);
+
+  // Guarded index creation for legacy DBs (only if columns exist)
+  await pool.query(`
+    DO $$ BEGIN
+      IF EXISTS (
+        SELECT 1 FROM information_schema.columns 
+        WHERE table_name = 'cms_pages' AND column_name = 'page_id'
+      ) THEN
+        CREATE INDEX IF NOT EXISTS idx_cms_pages_page_id ON cms_pages(page_id);
+      END IF;
+    END $$;
+    DO $$ BEGIN
+      IF EXISTS (
+        SELECT 1 FROM information_schema.columns 
+        WHERE table_name = 'cms_pages' AND column_name = 'is_published'
+      ) THEN
+        CREATE INDEX IF NOT EXISTS idx_cms_pages_published ON cms_pages(is_published);
+      END IF;
+    END $$;
+    DO $$ BEGIN
+      IF EXISTS (
+        SELECT 1 FROM information_schema.columns 
+        WHERE table_name = 'cms_contact_submissions' AND column_name = 'page_id'
+      ) THEN
+        CREATE INDEX IF NOT EXISTS idx_cms_contact_submissions_page_id ON cms_contact_submissions(page_id);
+      END IF;
+    END $$;
   `);
   console.log("✅ Tables initialized with persistence schema");
   
