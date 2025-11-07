@@ -383,29 +383,6 @@ async function initTables(){
       processed_at TIMESTAMP,
       created_at TIMESTAMP DEFAULT NOW()
     );
-    
-    -- Company Users table (multi-tenant company membership)
-    CREATE TABLE IF NOT EXISTS company_users (
-      id SERIAL PRIMARY KEY,
-      company_id INT NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
-      user_email TEXT NOT NULL,
-      google_email TEXT,
-      role TEXT CHECK (role IN ('member', 'admin')) DEFAULT 'member',
-      approved BOOLEAN DEFAULT false,
-      created_at TIMESTAMP DEFAULT NOW(),
-      updated_at TIMESTAMP DEFAULT NOW(),
-      UNIQUE(company_id, user_email)
-    );
-    
-    -- Company User Cases table (assign cases to company users)
-    CREATE TABLE IF NOT EXISTS company_user_cases (
-      id SERIAL PRIMARY KEY,
-      company_user_id INT NOT NULL REFERENCES company_users(id) ON DELETE CASCADE,
-      case_id TEXT NOT NULL,
-      notes TEXT,
-      created_at TIMESTAMP DEFAULT NOW(),
-      UNIQUE(company_user_id, case_id)
-    );
   `);
   
   // CMS translations table
@@ -525,9 +502,6 @@ async function initTables(){
     CREATE INDEX IF NOT EXISTS idx_cms_contact_submissions_status ON cms_contact_submissions(status, created_at DESC);
     CREATE INDEX IF NOT EXISTS idx_cms_contact_submissions_page_id ON cms_contact_submissions(page_id);
     CREATE INDEX IF NOT EXISTS idx_company_requests_status ON company_requests(status, created_at DESC);
-    CREATE INDEX IF NOT EXISTS idx_company_users_company ON company_users(company_id, approved);
-    CREATE INDEX IF NOT EXISTS idx_company_users_email ON company_users(user_email);
-    CREATE INDEX IF NOT EXISTS idx_company_user_cases_company_user ON company_user_cases(company_user_id);
   `);
   console.log("✅ Tables initialized with persistence schema");
   
@@ -3590,7 +3564,7 @@ app.get("/api/admin/companies/:companyId/users", authenticateAdmin, requireAdmin
     const usersWithCases = await Promise.all(
       usersResult.rows.map(async (user) => {
         const casesResult = await pool.query(
-          'SELECT id, case_id, notes, created_at FROM company_user_cases WHERE company_user_id = $1 ORDER BY created_at DESC',
+          'SELECT id, case_id, notes, created_at FROM user_cases WHERE company_user_id = $1 ORDER BY created_at DESC',
           [user.id]
         );
         return { ...user, cases: casesResult.rows };
@@ -3730,7 +3704,7 @@ app.post("/api/admin/companies/:companyId/users/:userId/cases", authenticateAdmi
     }
     
     const result = await pool.query(
-      `INSERT INTO company_user_cases (company_user_id, case_id, notes)
+      `INSERT INTO user_cases (company_user_id, case_id, notes)
        VALUES ($1, $2, $3)
        ON CONFLICT (company_user_id, case_id) DO UPDATE
        SET notes = EXCLUDED.notes
@@ -3741,7 +3715,7 @@ app.post("/api/admin/companies/:companyId/users/:userId/cases", authenticateAdmi
     await logAdminAction(
       req.adminUser.id,
       'company_user_case_added',
-      'company_user_cases',
+      'user_cases',
       result.rows[0].id,
       { company_id: companyId, user_id: userId, case_id },
       req.ip
@@ -3762,7 +3736,7 @@ app.delete("/api/admin/companies/:companyId/users/:userId/cases/:caseRowId", aut
     // Verify user belongs to company and case belongs to user
     const caseCheck = await pool.query(
       `SELECT cuc.id, cuc.case_id
-       FROM company_user_cases cuc
+       FROM user_cases cuc
        JOIN company_users cu ON cu.id = cuc.company_user_id
        WHERE cuc.id = $1 AND cu.id = $2 AND cu.company_id = $3`,
       [caseRowId, userId, companyId]
@@ -3772,12 +3746,12 @@ app.delete("/api/admin/companies/:companyId/users/:userId/cases/:caseRowId", aut
       return res.status(404).json({ error: 'Case not found' });
     }
     
-    await pool.query('DELETE FROM company_user_cases WHERE id = $1', [caseRowId]);
+    await pool.query('DELETE FROM user_cases WHERE id = $1', [caseRowId]);
     
     await logAdminAction(
       req.adminUser.id,
       'company_user_case_deleted',
-      'company_user_cases',
+      'user_cases',
       caseRowId,
       { company_id: companyId, user_id: userId, case_id: caseCheck.rows[0].case_id },
       req.ip
