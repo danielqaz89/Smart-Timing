@@ -1,6 +1,7 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, forwardRef } from 'react';
+import { TableVirtuoso } from 'react-virtuoso';
 import {
   Box,
   Typography,
@@ -138,82 +139,86 @@ function UsersContent() {
         />
       </Paper>
 
-      <TableContainer component={Paper} elevation={3}>
-        <Table>
-          <TableHead>
-            <TableRow>
-              <TableCell>User ID</TableCell>
-              <TableCell>Since</TableCell>
-              <TableCell align="right">Logs</TableCell>
-              <TableCell align="right">Projects</TableCell>
-              <TableCell align="right">Hourly Rate</TableCell>
-              <TableCell>Last Activity</TableCell>
-              <TableCell>Theme</TableCell>
-              <TableCell align="center">Actions</TableCell>
-            </TableRow>
-          </TableHead>
-          <TableBody>
-            {loading ? (
+      <Paper elevation={3} sx={{ height: 600 }}>
+        {loading ? (
+          <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100%' }}>
+            <CircularProgress />
+          </Box>
+        ) : users.length === 0 ? (
+          <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100%' }}>
+            <Typography variant="body1" color="text.secondary">
+              No users found
+            </Typography>
+          </Box>
+        ) : (
+          <TableVirtuoso
+            data={users}
+            style={{ height: '100%' }}
+            components={{
+              Table: (props) => <Table {...props} />,
+              TableHead: TableHead,
+              TableRow: TableRow,
+              TableBody: forwardRef<HTMLTableSectionElement>((props, ref) => <TableBody {...props} ref={ref} />),
+            }}
+            fixedHeaderContent={() => (
               <TableRow>
-                <TableCell colSpan={8} align="center">
-                  <CircularProgress />
-                </TableCell>
+                <TableCell sx={{ bgcolor: 'background.paper', fontWeight: 'bold' }}>User ID</TableCell>
+                <TableCell sx={{ bgcolor: 'background.paper', fontWeight: 'bold' }}>Since</TableCell>
+                <TableCell align="right" sx={{ bgcolor: 'background.paper', fontWeight: 'bold' }}>Logs</TableCell>
+                <TableCell align="right" sx={{ bgcolor: 'background.paper', fontWeight: 'bold' }}>Projects</TableCell>
+                <TableCell align="right" sx={{ bgcolor: 'background.paper', fontWeight: 'bold' }}>Hourly Rate</TableCell>
+                <TableCell sx={{ bgcolor: 'background.paper', fontWeight: 'bold' }}>Last Activity</TableCell>
+                <TableCell sx={{ bgcolor: 'background.paper', fontWeight: 'bold' }}>Theme</TableCell>
+                <TableCell align="center" sx={{ bgcolor: 'background.paper', fontWeight: 'bold' }}>Actions</TableCell>
               </TableRow>
-            ) : users.length === 0 ? (
-              <TableRow>
-                <TableCell colSpan={8} align="center">
-                  No users found
-                </TableCell>
-              </TableRow>
-            ) : (
-              users.map((user) => (
-                <TableRow key={user.user_id} hover>
-                  <TableCell>
-                    <Typography variant="body2" fontWeight="medium">
-                      {user.user_id}
-                    </Typography>
-                  </TableCell>
-                  <TableCell>
-                    {new Date(user.user_since).toLocaleDateString()}
-                  </TableCell>
-                  <TableCell align="right">
-                    <Chip label={user.total_logs} color="primary" size="small" />
-                  </TableCell>
-                  <TableCell align="right">
-                    <Chip label={user.total_projects} color="secondary" size="small" />
-                  </TableCell>
-                  <TableCell align="right">
-                    {user.hourly_rate ? `${user.hourly_rate} kr` : '-'}
-                  </TableCell>
-                  <TableCell>
-                    {user.last_activity_date
-                      ? new Date(user.last_activity_date).toLocaleDateString()
-                      : 'No activity'}
-                  </TableCell>
-                  <TableCell>
-                    <Chip
-                      label={user.theme_mode}
-                      size="small"
-                      variant="outlined"
-                    />
-                  </TableCell>
-                  <TableCell align="center">
-                    <IconButton
-                      size="small"
-                      color="error"
-                      onClick={() => openDeleteDialog(user.user_id)}
-                      disabled={admin?.role !== 'super_admin'}
-                      title={admin?.role !== 'super_admin' ? 'Super admin only' : 'Delete user'}
-                    >
-                      <DeleteIcon />
-                    </IconButton>
-                  </TableCell>
-                </TableRow>
-              ))
             )}
-          </TableBody>
-        </Table>
-      </TableContainer>
+            itemContent={(index, user) => (
+              <>
+                <TableCell>
+                  <Typography variant="body2" fontWeight="medium">
+                    {user.user_id}
+                  </Typography>
+                </TableCell>
+                <TableCell>
+                  {new Date(user.user_since).toLocaleDateString()}
+                </TableCell>
+                <TableCell align="right">
+                  <Chip label={user.total_logs} color="primary" size="small" />
+                </TableCell>
+                <TableCell align="right">
+                  <Chip label={user.total_projects} color="secondary" size="small" />
+                </TableCell>
+                <TableCell align="right">
+                  {user.hourly_rate ? `${user.hourly_rate} kr` : '-'}
+                </TableCell>
+                <TableCell>
+                  {user.last_activity_date
+                    ? new Date(user.last_activity_date).toLocaleDateString()
+                    : 'No activity'}
+                </TableCell>
+                <TableCell>
+                  <Chip
+                    label={user.theme_mode}
+                    size="small"
+                    variant="outlined"
+                  />
+                </TableCell>
+                <TableCell align="center">
+                  <IconButton
+                    size="small"
+                    color="error"
+                    onClick={() => openDeleteDialog(user.user_id)}
+                    disabled={admin?.role !== 'super_admin'}
+                    title={admin?.role !== 'super_admin' ? 'Super admin only' : 'Delete user'}
+                  >
+                    <DeleteIcon />
+                  </IconButton>
+                </TableCell>
+              </>
+            )}
+          />
+        )}
+      </Paper>
 
       {/* Delete Confirmation Dialog */}
       <Dialog open={deleteDialog.open} onClose={closeDeleteDialog}>
