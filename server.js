@@ -123,6 +123,8 @@ async function initTables(){
       name TEXT UNIQUE NOT NULL,
       logo_base64 TEXT,
       display_order INT DEFAULT 0,
+      enforce_hourly_rate BOOLEAN DEFAULT FALSE,
+      enforced_hourly_rate NUMERIC(10,2),
       created_at TIMESTAMP DEFAULT NOW(),
       updated_at TIMESTAMP DEFAULT NOW()
     );
@@ -387,6 +389,19 @@ async function initTables(){
   
   // CMS translations table
   await pool.query(`
+    -- Templates for company documents (HTML/CSS + handlebars)
+    CREATE TABLE IF NOT EXISTS company_document_templates (
+      id SERIAL PRIMARY KEY,
+      company_id INT NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+      template_type TEXT CHECK (template_type IN ('timesheet','report')) NOT NULL,
+      engine TEXT DEFAULT 'html',
+      template_html TEXT NOT NULL,
+      is_active BOOLEAN DEFAULT TRUE,
+      created_at TIMESTAMP DEFAULT NOW(),
+      updated_at TIMESTAMP DEFAULT NOW(),
+      UNIQUE(company_id, template_type)
+    );
+
     CREATE TABLE IF NOT EXISTS cms_translations (
       id TEXT PRIMARY KEY,
       translations JSONB NOT NULL DEFAULT '{}'::jsonb,
@@ -449,6 +464,8 @@ async function initTables(){
     END $$;
 
     ALTER TABLE project_info ADD COLUMN IF NOT EXISTS user_id TEXT DEFAULT 'default';
+    ALTER TABLE companies ADD COLUMN IF NOT EXISTS enforce_hourly_rate BOOLEAN DEFAULT FALSE;
+    ALTER TABLE companies ADD COLUMN IF NOT EXISTS enforced_hourly_rate NUMERIC(10,2);
     ALTER TABLE project_info ADD COLUMN IF NOT EXISTS is_active BOOLEAN DEFAULT true;
     ALTER TABLE project_info ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT NOW();
     ALTER TABLE project_info ADD COLUMN IF NOT EXISTS bedrift TEXT;
@@ -471,6 +488,7 @@ async function initTables(){
   // Create indexes (after columns exist)
   await pool.query(`
     CREATE INDEX IF NOT EXISTS idx_companies_name ON companies(name);
+    CREATE INDEX IF NOT EXISTS idx_company_templates_company_type ON company_document_templates(company_id, template_type) WHERE is_active = TRUE;
     CREATE INDEX IF NOT EXISTS idx_company_users_company ON company_users(company_id, approved);
     CREATE INDEX IF NOT EXISTS idx_company_users_email ON company_users(user_email);
     CREATE INDEX IF NOT EXISTS idx_user_cases_user ON user_cases(company_user_id);
@@ -2485,6 +2503,134 @@ async function logCompanyAction(companyId, actorId, action, targetType, targetId
       [companyId, actorId || null, action, targetType || null, targetId || null, details ? JSON.stringify(details) : null, prevData ? JSON.stringify(prevData) : null, newData ? JSON.stringify(newData) : null, req?.requestId || null, req?.ip || null, req?.headers?.['user-agent'] || null, prev_hash, hash, timestamp]
     );
   } catch (e) { console.error('Company audit log error:', e); }
+}
+
+// Company policy endpoints
+app.get('/api/company/policy', authenticateCompany, async (req, res) => {
+  try {
+    const row = (await pool.query('SELECT enforce_hourly_rate, enforced_hourly_rate FROM companies WHERE id = $1', [req.companyUser.company_id])).rows[0];
+    res.json({ enforce_hourly_rate: row?.enforce_hourly_rate || false, hourly_rate: row?.enforced_hourly_rate || null });
+  } catch (e) { res.status(500).json({ error: String(e) }); }
+});
+
+app.put('/api/company/policy', authenticateCompany, requireCompanyRole('admin'), async (req, res) => {
+  try {
+    const { enforce_hourly_rate, hourly_rate } = req.body || {};
+    await pool.query('UPDATE companies SET enforce_hourly_rate = COALESCE($1, enforce_hourly_rate), enforced_hourly_rate = COALESCE($2, enforced_hourly_rate), updated_at = NOW() WHERE id = $3', [enforce_hourly_rate, hourly_rate, req.companyUser.company_id]);
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: String(e) }); }
+});
+
+// Company template endpoints (HTML/CSS with handlebars)
+app.get('/api/company/templates/:type', authenticateCompany, requireCompanyRole('admin'), async (req, res) => {
+  try {
+    const t = String(req.params.type);
+    const row = (await pool.query('SELECT template_html, is_active, updated_at FROM company_document_templates WHERE company_id = $1 AND template_type = $2', [req.companyUser.company_id, t])).rows[0];
+    res.json(row || { template_html: '<style>body{font-family:Arial}</style><h1>{{company.name}}</h1>', is_active: true });
+  } catch (e) { res.status(500).json({ error: String(e) }); }
+});
+
+app.put('/api/company/templates/:type', authenticateCompany, requireCompanyRole('admin'), async (req, res) => {
+  try {
+    const t = String(req.params.type);
+    const { template_html, is_active } = req.body || {};
+    if (!template_html) return res.status(400).json({ error: 'template_html required' });
+    await pool.query(`
+      INSERT INTO company_document_templates (company_id, template_type, template_html, is_active)
+      VALUES ($1, $2, $3, COALESCE($4, TRUE))
+      ON CONFLICT (company_id, template_type) DO UPDATE
+      SET template_html = EXCLUDED.template_html, is_active = COALESCE(EXCLUDED.is_active, company_document_templates.is_active), updated_at = NOW()
+    `, [req.companyUser.company_id, t, template_html, is_active]);
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: String(e) }); }
+});
+
+app.post('/api/company/templates/:type/preview', authenticateCompany, requireCompanyRole('admin'), async (req, res) => {
+  try {
+    const t = String(req.params.type);
+    const row = (await pool.query('SELECT template_html FROM company_document_templates WHERE company_id = $1 AND template_type = $2', [req.companyUser.company_id, t])).rows[0];
+    const html = String(row?.template_html || req.body?.template_html || '');
+    if (!html) return res.status(400).json({ error: 'No template' });
+    // dynamic import handlebars
+    const { default: Handlebars } = await import('handlebars');
+    const tpl = Handlebars.compile(html);
+    const data = await buildTemplateData(req.companyUser.company_id, t, req.body?.month);
+    const out = tpl(data);
+    res.json({ html: out, data });
+  } catch (e) { res.status(500).json({ error: String(e) }); }
+});
+
+app.post('/api/company/templates/:type/pdf', authenticateCompany, requireCompanyRole('admin'), async (req, res) => {
+  try {
+    const t = String(req.params.type);
+    const row = (await pool.query('SELECT template_html FROM company_document_templates WHERE company_id = $1 AND template_type = $2', [req.companyUser.company_id, t])).rows[0];
+    const htmlRaw = String(row?.template_html || req.body?.template_html || '');
+    if (!htmlRaw) return res.status(400).json({ error: 'No template' });
+    const { default: Handlebars } = await import('handlebars');
+    const tpl = Handlebars.compile(htmlRaw);
+    const data = await buildTemplateData(req.companyUser.company_id, t, req.body?.month);
+    const html = tpl(data);
+    let browser;
+    try {
+      const { default: puppeteer } = await import('puppeteer');
+      browser = await puppeteer.launch({ args: ['--no-sandbox','--disable-setuid-sandbox'] });
+      const page = await browser.newPage();
+      await page.setContent(html, { waitUntil: 'networkidle0' });
+      const pdf = await page.pdf({ format: 'A4', printBackground: true });
+      await browser.close();
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', `attachment; filename="${t}.pdf"`);
+      return res.send(pdf);
+    } catch (err) {
+      if (browser) try { await browser.close(); } catch {}
+      return res.status(501).json({ error: 'PDF rendering not available', details: String(err) });
+    }
+  } catch (e) { res.status(500).json({ error: String(e) }); }
+});
+
+async function buildTemplateData(companyId, type, month) {
+  const company = (await pool.query('SELECT name, logo_base64, enforce_hourly_rate, enforced_hourly_rate FROM companies WHERE id = $1', [companyId])).rows[0] || {};
+  const m = month && /^\d{6}$/.test(String(month)) ? String(month) : new Date().toISOString().slice(0,7).replace('-','');
+  // totals per case
+  const perCase = (await pool.query(`
+    SELECT lr.case_id,
+           ROUND(SUM(EXTRACT(EPOCH FROM (lr.end_time - lr.start_time)) / 3600.0 - COALESCE(lr.break_hours,0))::numeric, 2) AS hours
+    FROM log_row lr
+    JOIN company_users cu ON cu.id = lr.company_user_id
+    WHERE cu.company_id = $1 AND to_char(lr.date,'YYYYMM') = $2 AND lr.case_id IS NOT NULL
+    GROUP BY lr.case_id
+    ORDER BY lr.case_id ASC
+  `, [companyId, m])).rows;
+  // rows (sample limited)
+  const rows = (await pool.query(`
+    SELECT lr.*, cu.user_email
+    FROM log_row lr JOIN company_users cu ON cu.id = lr.company_user_id
+    WHERE cu.company_id = $1 AND to_char(lr.date,'YYYYMM') = $2
+    ORDER BY lr.date ASC, lr.start_time ASC LIMIT 500
+  `, [companyId, m])).rows.map(r => ({
+    date: r.date,
+    start: String(r.start_time).slice(0,5),
+    end: String(r.end_time).slice(0,5),
+    break_hours: Number(r.break_hours||0),
+    activity: r.activity,
+    title: r.title,
+    project: r.project,
+    place: r.place,
+    notes: r.notes,
+    case_id: r.case_id,
+    hours: Math.max(0, ((new Date(`2000-01-01T${r.end_time}`) - new Date(`2000-01-01T${r.start_time}`)) / 3600000) - Number(r.break_hours||0))
+  }));
+  const total_hours = rows.reduce((s,r)=> s + Number(r.hours||0), 0);
+  const effective_rate = company.enforce_hourly_rate ? Number(company.enforced_hourly_rate || 0) : null;
+  const total_amount = effective_rate ? Math.round(total_hours * effective_rate * 100)/100 : null;
+  const month_label = new Date(m.slice(0,4)+'-'+m.slice(4,6)+'-01').toLocaleString('no-NO', { month: 'long', year: 'numeric' });
+  return {
+    company: { name: company.name || '', logo_url: company.logo_base64 || null },
+    period: { month: m, month_label },
+    totals: { total_hours, total_amount },
+    rows,
+    per_case: perCase
+  };
 }
 
 // Company self-service endpoints
