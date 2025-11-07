@@ -474,14 +474,23 @@ async function initTables(){
   
   // Backfill missing CMS page_id for older DBs (columns added above)
   try {
-    await pool.query(`
-      UPDATE cms_pages
-      SET page_id = lower(regexp_replace(coalesce(page_name, id::text), '[^a-z0-9]+', '-', 'g'))
-      WHERE (page_id IS NULL OR page_id = '');
+    // Check if page_name column exists before attempting UPDATE
+    const colCheck = await pool.query(`
+      SELECT column_name FROM information_schema.columns 
+      WHERE table_name = 'cms_pages' AND column_name IN ('page_id', 'page_name')
     `);
+    if (colCheck.rows.length === 2) {
+      await pool.query(`
+        UPDATE cms_pages
+        SET page_id = lower(regexp_replace(coalesce(page_name, id::text), '[^a-z0-9]+', '-', 'g'))
+        WHERE (page_id IS NULL OR page_id = '');
+      `);
+      console.log('✅ CMS page_id backfill completed');
+    } else {
+      console.log('ℹ️  CMS page_id/page_name columns not yet available, skipping backfill');
+    }
   } catch (e) {
-    // Ignore if cms_pages is empty or doesn't exist yet (no harm)
-    console.log('CMS page_id backfill skipped (table empty or not present)');
+    console.log('⚠️  CMS page_id backfill skipped:', e.message);
   }
   
   // Create indexes (after columns exist)
