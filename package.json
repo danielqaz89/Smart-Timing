@@ -9,7 +9,8 @@
   "scripts": {
     "start": "node server.js",
     "lint": "eslint . --ext .js,.mjs",
-    "lint:fix": "eslint . --ext .js,.mjs --fix"
+    "lint:fix": "eslint . --ext .js,.mjs --fix",
+    "cms:translations:apply": "bash -c 'set -euo pipefail; : ${API_BASE:?set API_BASE}; : ${ADMIN_JWT:?set ADMIN_JWT}; curl -s -H \"Authorization: Bearer $ADMIN_JWT\" \"$API_BASE/api/admin/cms/translations\" > translations.json.tmp && jq -s \".[0] * .[1]\" translations.json.tmp new_translations.json > merged_translations.json && curl -X PUT -H \"Authorization: Bearer $ADMIN_JWT\" -H \"Content-Type: application/json\" --data @merged_translations.json \"$API_BASE/api/admin/cms/translations\" && rm -f translations.json.tmp'"
   },
   "devDependencies": {
     "eslint": "^9.39.0"
