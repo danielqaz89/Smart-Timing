@@ -2,6 +2,7 @@
 import { useState, useEffect } from 'react';
 import { Button, CircularProgress } from '@mui/material';
 import FolderOpenIcon from '@mui/icons-material/FolderOpen';
+import { useTranslations } from '../contexts/TranslationsContext';
 
 const PICKER_API_KEY = process.env.NEXT_PUBLIC_GOOGLE_API_KEY || '';
 const CLIENT_ID = process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID || '';
@@ -12,6 +13,7 @@ interface GoogleSheetsPickerProps {
 }
 
 export default function GoogleSheetsPicker({ onSheetSelected, onError }: GoogleSheetsPickerProps) {
+  const { t } = useTranslations();
   const [pickerReady, setPickerReady] = useState(false);
   const [loading, setLoading] = useState(false);
 
@@ -34,7 +36,7 @@ export default function GoogleSheetsPicker({ onSheetSelected, onError }: GoogleS
       });
     };
     script.onerror = () => {
-      onError?.('Failed to load Google Picker API');
+      onError?.(t('sheets_picker.failed_load', 'Kunne ikke laste Google Picker API'));
     };
     document.body.appendChild(script);
 
@@ -45,7 +47,7 @@ export default function GoogleSheetsPicker({ onSheetSelected, onError }: GoogleS
 
   async function openPicker() {
     if (!pickerReady) {
-      onError?.('Picker is not ready yet');
+      onError?.(t('sheets_picker.not_ready', 'Picker er ikke klar enda'));
       return;
     }
 
@@ -57,7 +59,7 @@ export default function GoogleSheetsPicker({ onSheetSelected, onError }: GoogleS
       const tokenResponse = await fetch(`${apiBase}/api/auth/google/token?user_id=default`);
       
       if (!tokenResponse.ok) {
-        throw new Error('Failed to get access token. Please connect your Google account first.');
+        throw new Error(t('sheets_picker.token_failed', 'Kunne ikke hente tilgangstoken. Koble Google-konto først.'));
       }
 
       const { accessToken } = await tokenResponse.json();
@@ -89,7 +91,7 @@ export default function GoogleSheetsPicker({ onSheetSelected, onError }: GoogleS
       picker.setVisible(true);
     } catch (error: any) {
       console.error('Picker error:', error);
-      onError?.(error.message || 'Failed to open picker');
+      onError?.(error.message || t('sheets_picker.open_failed', 'Kunne ikke åpne velgeren'));
       setLoading(false);
     }
   }
@@ -101,7 +103,7 @@ export default function GoogleSheetsPicker({ onSheetSelected, onError }: GoogleS
       onClick={openPicker}
       disabled={!pickerReady || loading}
     >
-      {loading ? 'Opening...' : 'Browse Google Sheets'}
+      {loading ? t('common.opening', 'Åpner...') : t('import.from_sheets', 'Importer fra Google Sheets')}
     </Button>
   );
 }

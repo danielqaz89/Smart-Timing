@@ -1,11 +1,13 @@
 "use client";
 import { useEffect } from 'react';
 import { useAuth } from '@/contexts/AuthContext';
+import { useTranslations } from '@/contexts/TranslationsContext';
 import { Box, Container, Paper, Typography } from '@mui/material';
 import { useRouter } from 'next/navigation';
 
 export default function LoginPage() {
   const { login, isAuthenticated, isLoading } = useAuth();
+  const { t } = useTranslations();
   const router = useRouter();
 
   useEffect(() => {
@@ -42,11 +44,14 @@ export default function LoginPage() {
             textAlign: 'center',
           }}
         >
+          <Box sx={{ display: 'flex', justifyContent: 'center', mb: 1 }}>
+            <img src="/icons/logo.svg" alt="Smart Timing" style={{ height: 36 }} />
+          </Box>
           <Typography variant="h4" gutterBottom>
-            Smart Timing
+            {t('app.name', 'Smart Stempling')}
           </Typography>
           <Typography variant="body1" color="text.secondary" sx={{ mb: 4 }}>
-            Sign in to manage your time logs
+            {t('login.subtitle', 'Sign in to manage your time logs')}
           </Typography>
           <button
             onClick={login}
@@ -84,7 +89,7 @@ export default function LoginPage() {
                 <path d="M9 3.58c1.321 0 2.508.454 3.44 1.345l2.582-2.58C13.463.891 11.426 0 9 0A8.997 8.997 0 0 0 .957 4.958L3.964 7.29C4.672 5.163 6.656 3.58 9 3.58z" fill="#EA4335" />
               </g>
             </svg>
-            Sign in with Google
+            {t('login.sign_in_google', 'Sign in with Google')}
           </button>
         </Paper>
       </Box>

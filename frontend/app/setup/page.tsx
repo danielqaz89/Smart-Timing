@@ -1,7 +1,7 @@
 "use client";
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
-import { Box, Button, Card, CardContent, CardHeader, Container, Stack, TextField, Typography, CircularProgress, Autocomplete, Fade, MenuItem, ListItemIcon, ListItemText } from "@mui/material";
+import { Box, Button, Card, CardContent, CardHeader, Container, Stack, TextField, Typography, CircularProgress, Autocomplete, Fade, MenuItem, ListItemIcon, ListItemText, FormControl, InputLabel, Select } from "@mui/material";
 import GroupIcon from '@mui/icons-material/Group';
 import PsychologyIcon from '@mui/icons-material/Psychology';
 import SportsIcon from '@mui/icons-material/Sports';
@@ -10,6 +10,9 @@ import ManageAccountsIcon from '@mui/icons-material/ManageAccounts';
 import Image from "next/image";
 import { useProjectInfo } from "../../lib/hooks";
 import { searchBrregCompany, KINOA_TILTAK_AS, type BrregCompany } from "../../lib/brreg";
+import { useSnackbar } from "notistack";
+import { useLanguage } from "../../contexts/LanguageContext";
+import { useTranslations } from "../../contexts/TranslationsContext";
 
 interface Company {
   id: number;
@@ -20,6 +23,9 @@ interface Company {
 
 export default function Setup() {
   const router = useRouter();
+  const { enqueueSnackbar } = useSnackbar();
+  const { language, setLanguage } = useLanguage();
+  const { t } = useTranslations();
   const { projectInfo, createProjectInfo, updateProjectInfo, isLoading } = useProjectInfo();
   const [form, setForm] = useState({
     konsulent: "",
@@ -122,10 +128,11 @@ export default function Setup() {
           klient_id: form.klientId,
         });
       }
+      enqueueSnackbar(t('setup.completed', 'Oppsett fullført'), { variant: 'success' });
       router.replace("/");
-    } catch (e) {
+    } catch (e: any) {
       console.error("Failed to save project info:", e);
-      alert("Kunne ikke lagre prosjektinfo. Prøv igjen.");
+      enqueueSnackbar(`${t('errors.save_project_info_failed', 'Kunne ikke lagre prosjektinfo')}: ${e?.message || e}`, { variant: 'error' });
     } finally {
       setSaving(false);
     }
@@ -145,12 +152,21 @@ export default function Setup() {
         <CardHeader 
           title={
             <Typography variant="h5" align="center">
-              {projectInfo ? 'Rediger prosjektinformasjon' : 'Prosjektinformasjon'}
+              {projectInfo ? t('setup.edit_title', 'Rediger prosjektinformasjon') : t('setup.title', 'Prosjektinformasjon')}
             </Typography>
           } 
         />
         <CardContent>
           <Stack spacing={2}>
+            {/* Språkvalg */}
+            <FormControl fullWidth>
+              <InputLabel>{t('settings.language', 'Språk')}</InputLabel>
+              <Select label={t('settings.language', 'Språk')} value={language} onChange={(e)=> setLanguage(e.target.value as any)}>
+                <MenuItem value="no">Norsk</MenuItem>
+                <MenuItem value="en">English</MenuItem>
+              </Select>
+            </FormControl>
+
             {companyLogo && (
               <Fade in={Boolean(companyLogo)}>
                 <Box sx={{ 
@@ -177,12 +193,12 @@ export default function Setup() {
               </Fade>
             )}
             <TextField 
-              label="Konsulent" 
+              label={t('project_info.consultant', 'Konsulent')} 
               value={form.konsulent} 
               onChange={(e)=>setForm({ ...form, konsulent: e.target.value })} 
               fullWidth 
               required
-              aria-label="Konsulent navn"
+              aria-label={t('project_info.consultant', 'Konsulent')}
             />
             <Autocomplete
               freeSolo
@@ -199,10 +215,10 @@ export default function Setup() {
               renderInput={(params) => (
                 <TextField
                   {...params}
-                  label="Hvilken bedrift jobber du for?"
-                  placeholder="Søk etter bedrift..."
+                  label={t('setup.company_search_label', 'Hvilken bedrift jobber du for?')}
+                  placeholder={t('setup.company_search_placeholder', 'Søk etter bedrift...')}
                   required
-                  aria-label="Bedrift søk"
+                  aria-label={t('aria.company_search', 'Bedrift søk')}
                   InputProps={{
                     ...params.InputProps,
                     endAdornment: (
@@ -219,7 +235,7 @@ export default function Setup() {
                   <Stack>
                     <Typography variant="body2">{option.navn}</Typography>
                     <Typography variant="caption" color="text.secondary">
-                      Org.nr: {option.organisasjonsnummer}
+                      {t('setup.org_number', 'Org.nr:')} {option.organisasjonsnummer}
                       {option.organisasjonsform && ` • ${option.organisasjonsform.beskrivelse}`}
                     </Typography>
                   </Stack>
@@ -227,12 +243,12 @@ export default function Setup() {
               )}
             />
             <TextField 
-              label="Oppdragsgiver" 
+              label={t('project_info.client', 'Oppdragsgiver')} 
               value={form.oppdragsgiver} 
               onChange={(e)=>setForm({ ...form, oppdragsgiver: e.target.value })} 
               fullWidth 
               required
-              aria-label="Oppdragsgiver navn"
+              aria-label={t('project_info.client', 'Oppdragsgiver')}
             />
             <Autocomplete
               freeSolo
@@ -262,39 +278,39 @@ export default function Setup() {
               renderInput={(params) => (
                 <TextField
                   {...params}
-                  label="Tiltak / Rolle"
-                  placeholder="Velg eller skriv din rolle..."
-                  aria-label="Tiltak eller rolle"
-                  helperText="Velg rolle fra listen eller skriv egen. Påvirker rapportmal."
+                  label={t('setup.role_label', 'Tiltak / Rolle')}
+                  placeholder={t('setup.role_placeholder', 'Velg eller skriv din rolle...')}
+                  aria-label={t('setup.role_label', 'Tiltak eller rolle')}
+                  helperText={t('setup.role_helper', 'Velg rolle fra listen eller skriv egen. Påvirker rapportmal.')}
                 />
               )}
             />
             <TextField 
-              label="Periode" 
+              label={t('setup.period_label', 'Periode')} 
               value={form.periode} 
               onChange={(e)=>setForm({ ...form, periode: e.target.value })} 
               fullWidth
-              placeholder="f.eks. Q1 2025"
-              aria-label="Periode"
+              placeholder={t('setup.period_placeholder', 'f.eks. Q1 2025')}
+              aria-label={t('setup.period_label', 'Periode')}
             />
             <TextField 
-              label="Klient ID / Saks nr" 
+              label={t('setup.client_id_label', 'Klient ID / Saks nr')} 
               value={form.klientId} 
               onChange={(e)=>setForm({ ...form, klientId: e.target.value })} 
               fullWidth
-              aria-label="Klient ID eller saksnummer"
+              aria-label={t('setup.client_id_aria', 'Klient ID eller saksnummer')}
             />
             <Typography variant="caption" color="text.secondary">
-              E-postinnstillinger konfigureres i hovedvinduet under innstillinger.
+              {t('setup.email_hint', 'E-postinnstillinger konfigureres i hovedvinduet under innstillinger.')}
             </Typography>
             <Button 
               variant="contained" 
               onClick={save} 
               disabled={saving || !form.konsulent || !form.bedrift || !form.oppdragsgiver}
               sx={{ mt: 1 }}
-              aria-label={projectInfo ? 'Oppdater prosjektinfo' : 'Opprett prosjekt'}
+              aria-label={projectInfo ? t('aria.update_project_info', 'Oppdater prosjektinfo') : t('aria.create_project', 'Opprett prosjekt')}
             >
-              {saving ? <CircularProgress size={24} /> : (projectInfo ? 'Oppdater' : 'Opprett prosjekt')}
+              {saving ? <CircularProgress size={24} /> : (projectInfo ? t('setup.update_btn', 'Oppdater') : t('setup.create_btn', 'Opprett prosjekt'))}
             </Button>
           </Stack>
         </CardContent>

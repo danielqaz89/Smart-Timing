@@ -17,6 +17,7 @@ import {
   Zoom,
   useTheme,
   useMediaQuery,
+  Tooltip,
 } from "@mui/material";
 import PlayArrowIcon from "@mui/icons-material/PlayArrow";
 import StopIcon from "@mui/icons-material/Stop";
@@ -24,6 +25,7 @@ import TimerIcon from "@mui/icons-material/Timer";
 import WorkIcon from "@mui/icons-material/Work";
 import MeetingRoomIcon from "@mui/icons-material/MeetingRoom";
 import dayjs from "dayjs";
+import { useTranslations } from "../contexts/TranslationsContext";
 
 interface QuickTemplate {
   id: number;
@@ -58,6 +60,7 @@ export default function QuickStampFAB({
   onStampIn, 
   onStampOut 
 }: QuickStampFABProps) {
+  const { t } = useTranslations();
   const [open, setOpen] = useState(false);
   const [elapsedTime, setElapsedTime] = useState("00:00:00");
   const theme = useTheme();
@@ -100,24 +103,26 @@ export default function QuickStampFAB({
     <>
       {/* Floating Action Button */}
       <Zoom in={true}>
-        <Fab
-          color={activeStamp ? "success" : "primary"}
-          aria-label={activeStamp ? "Stamp out" : "Stamp in"}
-          onClick={() => setOpen(true)}
-          sx={{
-            position: "fixed",
-            bottom: 80, // Above mobile nav
-            right: 16,
-            zIndex: 1200,
-            animation: activeStamp ? "pulse 2s infinite" : "none",
-            "@keyframes pulse": {
-              "0%, 100%": { boxShadow: "0 0 0 0 rgba(76, 175, 80, 0.7)" },
-              "50%": { boxShadow: "0 0 0 10px rgba(76, 175, 80, 0)" },
-            },
-          }}
-        >
-          {activeStamp ? <TimerIcon /> : <PlayArrowIcon />}
-        </Fab>
+        <Tooltip title={activeStamp ? t('tooltips.stamp_out', 'Stemple ut') : t('tooltips.stamp_in', 'Stemple inn')} arrow>
+          <Fab
+            color={activeStamp ? "success" : "primary"}
+            aria-label={activeStamp ? t('aria.stamp_out', 'Stemple ut') : t('aria.stamp_in', 'Stemple inn')}
+            onClick={() => setOpen(true)}
+            sx={{
+              position: "fixed",
+              bottom: 80, // Above mobile nav
+              right: 16,
+              zIndex: 1200,
+              animation: activeStamp ? "pulse 2s infinite" : "none",
+              "@keyframes pulse": {
+                "0%, 100%": { boxShadow: "0 0 0 0 rgba(76, 175, 80, 0.7)" },
+                "50%": { boxShadow: "0 0 0 10px rgba(76, 175, 80, 0)" },
+              },
+            }}
+          >
+            {activeStamp ? <TimerIcon /> : <PlayArrowIcon />}
+          </Fab>
+        </Tooltip>
       </Zoom>
 
       {/* Dialog for Stamp In (Choose Template) */}
@@ -130,12 +135,12 @@ export default function QuickStampFAB({
         <DialogTitle>
           <Stack direction="row" alignItems="center" spacing={1}>
             <PlayArrowIcon color="primary" />
-            <Typography variant="h6">Stemple Inn</Typography>
+            <Typography variant="h6">{t('home.stamp_in', 'Stemple INN')}</Typography>
           </Stack>
         </DialogTitle>
         <DialogContent>
           <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-            Velg mal eller aktivitet:
+            {t('home.choose_template', 'Velg mal eller aktivitet:')}
           </Typography>
           <List>
             {/* Quick Activity Buttons */}
@@ -144,14 +149,14 @@ export default function QuickStampFAB({
                 onClick={() =>
                   handleStampIn({
                     id: 0,
-                    label: "Arbeid",
+                    label: t('stats.work', 'Arbeid'),
                     activity: "Work",
                   })
                 }
                 sx={{ borderRadius: 1, border: "1px solid", borderColor: "divider" }}
               >
                 <WorkIcon sx={{ mr: 1 }} />
-                <ListItemText primary="Arbeid (standard)" />
+                <ListItemText primary={`${t('stats.work', 'Arbeid')} (standard)`} />
               </ListItemButton>
             </ListItem>
             <ListItem disablePadding sx={{ mb: 2 }}>
@@ -159,14 +164,14 @@ export default function QuickStampFAB({
                 onClick={() =>
                   handleStampIn({
                     id: 0,
-                    label: "Møte",
+                    label: t('stats.meetings', 'Møte'),
                     activity: "Meeting",
                   })
                 }
                 sx={{ borderRadius: 1, border: "1px solid", borderColor: "divider" }}
               >
                 <MeetingRoomIcon sx={{ mr: 1 }} />
-                <ListItemText primary="Møte (standard)" />
+                <ListItemText primary={`${t('stats.meetings', 'Møte')} (standard)`} />
               </ListItemButton>
             </ListItem>
 
@@ -174,7 +179,7 @@ export default function QuickStampFAB({
             {templates.length > 0 && (
               <>
                 <Typography variant="caption" color="text.secondary" sx={{ px: 2, mb: 1 }}>
-                  MALER:
+                  {t('quick_templates.templates_header', 'MALER:')}
                 </Typography>
                 {templates.map((template) => (
                   <ListItem key={template.id} disablePadding sx={{ mb: 1 }}>
@@ -187,7 +192,7 @@ export default function QuickStampFAB({
                         secondary={
                           <Stack direction="row" spacing={0.5} sx={{ mt: 0.5 }}>
                             <Chip
-                              label={template.activity === "Work" ? "Arbeid" : "Møte"}
+                              label={template.activity === "Work" ? t('stats.work', 'Arbeid') : t('stats.meetings', 'Møte')}
                               size="small"
                               color={template.activity === "Work" ? "primary" : "secondary"}
                             />
@@ -216,7 +221,7 @@ export default function QuickStampFAB({
         <DialogTitle>
           <Stack direction="row" alignItems="center" spacing={1}>
             <StopIcon color="error" />
-            <Typography variant="h6">Stemple Ut</Typography>
+            <Typography variant="h6">{t('home.stamp_out', 'Stemple UT')}</Typography>
           </Stack>
         </DialogTitle>
         <DialogContent>
@@ -225,13 +230,13 @@ export default function QuickStampFAB({
               {elapsedTime}
             </Typography>
             <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-              Tid siden du stemplet inn
+              {t('aria.time_since_stamp_in', 'Tid siden du stemplet inn')}
             </Typography>
 
             {activeStamp && (
               <Box sx={{ mb: 3, p: 2, bgcolor: "action.hover", borderRadius: 1 }}>
                 <Typography variant="body2" color="text.secondary">
-                  {activeStamp.activity === "Work" ? "Arbeid" : "Møte"}
+                  {activeStamp.activity === "Work" ? t('stats.work', 'Arbeid') : t('stats.meetings', 'Møte')}
                 </Typography>
                 {activeStamp.title && (
                   <Typography variant="body1" fontWeight="medium">
@@ -244,17 +249,17 @@ export default function QuickStampFAB({
                   </Typography>
                 )}
                 <Typography variant="caption" display="block" sx={{ mt: 1 }}>
-                  Start: {activeStamp.start_time?.slice(0, 5)}
+                  {t('fields.in', 'Inn')}: {activeStamp.start_time?.slice(0, 5)}
                 </Typography>
               </Box>
             )}
 
             <Stack direction="row" spacing={2}>
               <Button variant="outlined" onClick={() => setOpen(false)} fullWidth>
-                Avbryt
+                {t('common.cancel', 'Avbryt')}
               </Button>
-              <Button variant="contained" color="error" onClick={handleStampOut} fullWidth>
-                Stemple Ut
+              <Button variant="contained" color="error" onClick={handleStampOut} fullWidth aria-label={t('aria.stamp_out', 'Stemple ut')}>
+                {t('home.stamp_out', 'Stemple UT')}
               </Button>
             </Stack>
           </Box>

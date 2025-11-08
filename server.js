@@ -242,6 +242,7 @@ async function initTables(){
       invoice_reminder_active BOOLEAN DEFAULT false,
       theme_mode TEXT DEFAULT 'dark' CHECK (theme_mode IN ('light', 'dark')),
       view_mode TEXT DEFAULT 'month' CHECK (view_mode IN ('week', 'month')),
+      language TEXT DEFAULT 'no' CHECK (language IN ('no','en')),
       created_at TIMESTAMP DEFAULT NOW(),
       updated_at TIMESTAMP DEFAULT NOW()
     );
@@ -489,6 +490,7 @@ async function initTables(){
     ALTER TABLE user_settings ADD COLUMN IF NOT EXISTS invoice_reminder_active BOOLEAN DEFAULT false;
     ALTER TABLE user_settings ADD COLUMN IF NOT EXISTS theme_mode TEXT DEFAULT 'dark';
     ALTER TABLE user_settings ADD COLUMN IF NOT EXISTS view_mode TEXT DEFAULT 'month';
+    ALTER TABLE user_settings ADD COLUMN IF NOT EXISTS language TEXT DEFAULT 'no';
     ALTER TABLE user_settings ADD COLUMN IF NOT EXISTS google_access_token TEXT;
     ALTER TABLE user_settings ADD COLUMN IF NOT EXISTS google_refresh_token TEXT;
     ALTER TABLE user_settings ADD COLUMN IF NOT EXISTS google_token_expiry TIMESTAMP;
@@ -582,6 +584,631 @@ async function initTables(){
     CREATE INDEX IF NOT EXISTS idx_company_requests_status ON company_requests(status, created_at DESC);
   `);
 
+  // Seed default translations (idempotent)
+  await pool.query(`
+    INSERT INTO cms_translations (translation_key, category, no, en)
+    VALUES
+      ('home.stamping','home','Stempling','Stamping'),
+      ('home.add_manual','home','Legg til manuelt','Add manually'),
+      ('home.month_metrics','home','Månedsfilter og nøkkeltall','Monthly filter and metrics'),
+      ('home.copy_previous_row','home','Kopier forrige rad','Copy previous row'),
+      ('home.stamp_in','home','Stemple INN','Clock IN'),
+      ('home.stamp_out','home','Stemple UT','Clock OUT'),
+      ('home.export_pdf','home','Eksporter PDF','Export PDF'),
+      ('home.show_archived','home','Vis arkiverte','Show archived'),
+      ('home.select_many','home','Velg flere','Select multiple'),
+      ('home.cancel','home','Avbryt','Cancel'),
+      ('home.send_timesheet','home','Send inn timeliste','Send timesheet'),
+      ('home.report_month','home','Skriv en rapport for måneden','Write a monthly report'),
+      ('home.files_import','home','Importer timeplan (CSV)','Import schedule (CSV)'),
+      ('home.google_sheets_webhook','home','Google Sheets Webhook (toveis)','Google Sheets Webhook (two-way)'),
+      ('home.add_workdays_month','home','Legg inn hverdager for måned','Add workdays for month'),
+      ('home.search_placeholder','home','Søk i logger (tittel, prosjekt, sted, notater, aktivitet)...','Search logs (title, project, place, notes, activity)...'),
+      ('settings.title','settings','Innstillinger','Settings'),
+      ('settings.language','settings','Språk','Language'),
+      ('portal.dashboard','portal','Dashboard','Dashboard'),
+      ('portal.users','portal','Brukere','Users'),
+      ('portal.companies','portal','Selskaper','Companies'),
+      ('portal.cases','portal','Saker','Cases'),
+      ('portal.templates','portal','Maler','Templates'),
+      ('portal.reports','portal','Rapporter','Reports'),
+      ('portal.invites','portal','Invitasjoner','Invites'),
+      ('portal.settings','portal','Innstillinger','Settings'),
+      ('admin.dashboard','admin','Dashboard','Dashboard'),
+      ('admin.audit_log','admin','Revisjonslogg','Audit Log'),
+      ('admin.settings','admin','Innstillinger','Settings'),
+      ('admin.cms_pages','admin','CMS Sider','CMS Pages'),
+      ('admin.cms_themes','admin','CMS Tema','CMS Themes'),
+      ('admin.cms_translations','admin','CMS Oversettelser','CMS Translations'),
+      ('admin.cms_media','admin','CMS Media','CMS Media'),
+      ('admin.users','admin','Brukere','Users'),
+      ('admin.companies','admin','Selskaper','Companies'),
+      ('admin.admins','admin','Administratorer','Admins'),
+      ('portal.title','portal','Bedriftsportal','Company Portal'),
+      ('admin.title','admin','Smart Timing Admin','Smart Timing Admin'),
+      ('common.logout','common','Logg ut','Logout'),
+      ('common.switch_to_english','common','Bytt til engelsk','Switch to English'),
+      ('common.switch_to_norwegian','common','Bytt til Norsk','Switch to Norwegian'),
+      ('setup.title','setup','Prosjektinformasjon','Project information'),
+      ('setup.edit_title','setup','Rediger prosjektinformasjon','Edit project information'),
+      ('setup.completed','setup','Oppsett fullført','Setup completed'),
+      ('app.name','app','Smart Stempling','Smart Stamping'),
+      ('nav.reports','nav','Rapporter','Reports'),
+      ('nav.project','nav','Prosjekt','Project'),
+      -- Admin Companies
+      ('admin.companies.title','admin','Selskaper','Companies'),
+      ('admin.companies.new_company','admin','Ny bedrift','New Company'),
+      ('admin.companies.users_label','admin','brukere','users'),
+      ('admin.companies.company_users','admin','Bedriftsbrukere','Company Users'),
+      ('admin.companies.add_user','admin','Legg til bruker','Add User'),
+      ('admin.companies.no_users','admin','Ingen brukere ennå','No users yet'),
+      ('admin.companies.create_title','admin','Opprett ny bedrift','Create New Company'),
+      ('admin.companies.add_user_to','admin','Legg til bruker i','Add User to'),
+      -- Admin Users
+      ('admin.users.title','admin','Brukeradministrasjon','User Management'),
+      ('admin.users.search_label','admin','Søk etter brukere','Search users'),
+      ('admin.users.search_placeholder','admin','Søk etter bruker-ID...','Search by user ID...'),
+      ('admin.users.none','admin','Ingen brukere funnet','No users found'),
+      ('admin.users.no_activity','admin','Ingen aktivitet','No activity'),
+      ('admin.users.delete_user','admin','Slett bruker','Delete user'),
+      ('admin.users.delete_title','admin','Slett bruker','Delete User'),
+      ('admin.users.delete_confirm','admin','Er du sikker på at du vil slette denne brukeren permanent? Dette kan ikke angres.','Are you sure you want to permanently delete this user? This cannot be undone.'),
+      -- Admin Common
+      ('admin.common.super_admin_only','admin','Kun for superadmin','Super admin only'),
+      -- Admin Dashboard
+      ('admin.dashboard.total_users','admin','Antall brukere','Total Users'),
+      ('admin.dashboard.total_logs','admin','Antall logger','Total Logs'),
+      ('admin.dashboard.total_projects','admin','Antall prosjekter','Total Projects'),
+      ('admin.dashboard.total_hours','admin','Totalt antall timer','Total Hours Logged'),
+      ('admin.dashboard.system_stats','admin','Systemstatistikk','System Statistics'),
+      ('admin.dashboard.active_users','admin','Aktive brukere (med logger)','Active Users (with logs)'),
+      ('admin.dashboard.users_with_projects','admin','Brukere med prosjekter','Users with Projects'),
+      ('admin.dashboard.active_projects','admin','Aktive prosjekter','Active Projects'),
+      ('admin.dashboard.active_months','admin','Aktive måneder','Active Months'),
+      ('admin.dashboard.most_active','admin','Mest aktive brukere (siste 7 dager)','Most Active Users (Last 7 Days)'),
+      ('admin.dashboard.no_activity_7d','admin','Ingen aktivitet siste 7 dager','No activity in the last 7 days'),
+      -- Admin Login
+      ('admin.login.title','admin','Admin-innlogging','Admin Login'),
+      ('admin.login.username_or_email','admin','Brukernavn eller e-post','Username or Email'),
+      ('admin.login.password','admin','Passord','Password'),
+      ('admin.login.submit','admin','Logg inn','Login'),
+      ('admin.login.default_creds','admin','Standard påloggingsinfo: admin / Admin@123','Default credentials: admin / Admin@123'),
+      -- Fields
+      ('fields.company_name','fields','Bedriftsnavn','Company Name'),
+      ('fields.display_order','fields','Visningsrekkefølge','Display Order'),
+      ('fields.logo_base64_optional','fields','Logo Base64 (valgfritt)','Logo Base64 (optional)'),
+      ('fields.user_email','fields','Bruker-e-post','User Email'),
+      ('fields.google_email_optional','fields','Google e-post (valgfritt)','Google Email (optional)'),
+      ('fields.role','fields','Rolle','Role'),
+      -- Roles
+      ('roles.member','roles','Medlem','Member'),
+      ('roles.case_manager','roles','Saksbehandler','Case Manager'),
+      ('roles.admin','roles','Administrator','Admin'),
+      -- Table
+      ('table.email','table','E-post','Email'),
+      ('table.google_email','table','Google e-post','Google Email'),
+      ('table.role','table','Rolle','Role'),
+      ('table.status','table','Status','Status'),
+      ('table.cases','table','Saker','Cases'),
+      ('table.actions','table','Handlinger','Actions'),
+      ('table.user_id','table','Bruker-ID','User ID'),
+      ('table.since','table','Siden','Since'),
+      ('table.logs','table','Logger','Logs'),
+      ('table.projects','table','Prosjekter','Projects'),
+      ('table.hourly_rate','table','Timesats','Hourly Rate'),
+      ('table.last_activity','table','Siste aktivitet','Last Activity'),
+      ('table.theme','table','Tema','Theme'),
+      -- Common extra
+      ('common.approved','common','Godkjent','Approved'),
+      ('common.pending','common','Venter','Pending'),
+      ('common.approve','common','Godkjenn','Approve'),
+      ('common.cancel','common','Avbryt','Cancel'),
+      ('common.create','common','Opprett','Create'),
+      ('common.refresh','common','Oppdater','Refresh'),
+      ('common.delete_permanently','common','Slett permanent','Delete Permanently'),
+      ('common.last_updated','common','Sist oppdatert:','Last updated:'),
+      ('common.add','common','Legg til','Add'),
+      ('common.close','common','Lukk','Close'),
+      ('common.delete','common','Slett','Delete'),
+      -- Fields extended
+      ('fields.case_id','fields','Saksnummer','Case number'),
+      ('fields.notes_optional','fields','Notater (valgfritt)','Notes (optional)'),
+      ('fields.email','fields','E-post','Email'),
+      -- Placeholders
+      ('placeholders.email_to','placeholders','mottaker@firma.no','recipient@company.com'),
+      ('placeholders.email_cc','placeholders','cc@firma.no','cc@company.com'),
+      ('placeholders.email_bcc','placeholders','bcc@firma.no','bcc@company.com'),
+      -- Portal Users
+      ('portal.users.title','portal','Brukere','Users'),
+      ('portal.users.assign_case','portal','Tildel sak','Assign case'),
+      -- Portal Cases
+      ('portal.cases.title','portal','Saksadministrasjon','Case management'),
+      ('portal.cases.search_placeholder','portal','Søk etter bruker eller saks-ID...','Search by user or case ID...'),
+      ('portal.cases.user','portal','Bruker','User'),
+      ('portal.cases.assigned_cases','portal','Tildelte saker','Assigned cases'),
+      ('portal.cases.no_cases','portal','Ingen saker','No cases'),
+      ('portal.cases.add_case','portal','Legg til sak','Add case'),
+      ('portal.cases.add_case_for','portal','Legg til sak for','Add case for'),
+      -- Portal Templates
+      ('portal.templates.title','portal','Dokumentmaler','Document Templates'),
+      ('portal.templates.tab_timesheet','portal','Timeliste','Timesheet'),
+      ('portal.templates.tab_case_report','portal','Saksrapport','Case report'),
+      ('portal.templates.editor_html','portal','HTML','HTML'),
+      ('portal.templates.editor_css','portal','CSS','CSS'),
+      ('portal.templates.placeholder_html','portal','Skriv HTML med Handlebars-variabler...','Write HTML with Handlebars variables...'),
+      ('portal.templates.placeholder_css','portal','Skriv CSS...','Write CSS...'),
+      ('portal.templates.variables_hint','portal','Tilgjengelige variabler: {{company.name}}, {{period.month_label}}, {{totals.total_hours}}, {{per_case}}, {{report.*}}','Available variables: {{company.name}}, {{period.month_label}}, {{totals.total_hours}}, {{per_case}}, {{report.*}}'),
+      ('portal.templates.save','portal','Lagre mal','Save template'),
+      ('portal.templates.saved','portal','Mal lagret!','Template saved!'),
+      ('portal.templates.save_failed','portal','Kunne ikke lagre mal','Failed to save template'),
+      -- Portal Reports
+      ('portal.reports.title','portal','Saksrapporter','Case reports'),
+      ('portal.reports.user','portal','Bruker','User'),
+      ('portal.reports.case','portal','Saksnr','Case no.'),
+      ('portal.reports.month','portal','Måned','Month'),
+      ('portal.reports.status','portal','Status','Status'),
+      ('portal.reports.submitted','portal','Innsendt','Submitted'),
+      ('portal.reports.view_title','portal','Rapport','Report'),
+      ('portal.reports.background','portal','Bakgrunn','Background'),
+      ('portal.reports.actions_done','portal','Tiltak gjennomført','Actions done'),
+      ('portal.reports.progress','portal','Fremgang','Progress'),
+      ('portal.reports.challenges','portal','Utfordringer','Challenges'),
+      ('portal.reports.assessment','portal','Vurdering','Assessment'),
+      ('portal.reports.recommendations','portal','Anbefalinger','Recommendations'),
+      ('portal.reports.reject_title','portal','Avslå rapport','Reject report'),
+      ('portal.reports.reason','portal','Begrunnelse','Reason'),
+      ('portal.reports.reject','portal','Avslå','Reject'),
+      ('portal.reports.approve_confirm','portal','Godkjenn denne rapporten?','Approve this report?'),
+      -- Portal Invites
+      ('portal.invites.title','portal','Invitasjoner','Invites'),
+      ('portal.invites.new','portal','Ny invitasjon','New invite'),
+      ('portal.invites.created','portal','Opprettet','Created'),
+      ('portal.invites.accepted','portal','Akseptert','Accepted'),
+      ('portal.invites.resend','portal','Send på nytt','Resend'),
+      ('portal.invites.resent','portal','Invitasjon sendt på nytt','Invite resent'),
+      ('portal.invites.create_title','portal','Opprett invitasjon','Create invite'),
+      ('portal.invites.delete_confirm','portal','Sikker på at du vil slette invitasjonen?','Are you sure you want to delete the invite?'),
+      -- Portal Settings
+      ('portal.settings.title','portal','Innstillinger','Settings'),
+      ('portal.settings.hourly_policy_title','portal','Timesats-policy','Hourly rate policy'),
+      ('portal.settings.hourly_policy_desc','portal','Når aktivert, vil alle brukere måtte bruke den fastsatte timesatsen i sine rapporter.','When enabled, all users must use the enforced hourly rate in their reports.'),
+      ('portal.settings.enforce_hourly','portal','Påtving fast timesats','Enforce fixed hourly rate'),
+      ('portal.settings.timesheet_policy_title','portal','Timeliste-mottaker policy','Timesheet recipient policy'),
+      ('portal.settings.timesheet_policy_desc','portal','Når aktivert, vil alle timelister sendes til de fastsatte mottakerne (brukerne kan ikke endre dette).','When enabled, all timesheets are sent to enforced recipients (users cannot change this).'),
+      ('portal.settings.enforce_recipients','portal','Påtving faste mottakere','Enforce recipients'),
+      ('portal.settings.save','portal','Lagre innstillinger','Save settings'),
+      -- Portal Dashboard
+      ('portal.dashboard','portal','Dashboard','Dashboard'),
+      ('portal.dashboard.users','portal','Brukere','Users'),
+      ('portal.dashboard.approvals','portal','Godkjenninger','Approvals'),
+      ('portal.dashboard.invites','portal','Invitasjoner','Invites'),
+      -- Portal Login & App Login
+      ('portal.login.title','portal','Bedriftsportal','Company Portal'),
+      ('portal.login.subtitle','portal','Logg inn med bedriftskonto','Sign in with your company account'),
+      ('portal.login.password','portal','Passord','Password'),
+      ('portal.login.loading','portal','Logger inn...','Signing in...'),
+      ('portal.login.submit','portal','Logg inn','Sign in'),
+      ('login.subtitle','login','Sign in to manage your time logs','Sign in to manage your time logs'),
+      ('login.sign_in_google','login','Logg inn med Google','Sign in with Google'),
+      -- Admin Audit
+      ('admin.audit.title','admin','Revisjonslogg','Audit Log'),
+      ('admin.audit.filter_action','admin','Handling','Action'),
+      ('admin.audit.filter_admin_id','admin','Admin-ID','Admin ID'),
+      ('common.search','common','Søk','Search'),
+      ('common.offset','common','Offset','Offset'),
+      ('common.limit','common','Limit','Limit'),
+      ('common.prev','common','Forrige','Previous'),
+      ('common.next','common','Neste','Next'),
+      ('audit.time','audit','Tid','Time'),
+      ('audit.admin','audit','Admin','Admin'),
+      ('audit.email','audit','Epost','Email'),
+      ('audit.action','audit','Handling','Action'),
+      ('audit.target','audit','Mål','Target'),
+      ('audit.details','audit','Detaljer','Details'),
+      ('audit.ip','audit','IP','IP'),
+      -- Settings Drawer extras
+      ('fields.recipient_email','fields','Mottaker e-post','Recipient email'),
+      ('placeholders.recipient_email','placeholders','kunde@bedrift.no','customer@company.com'),
+      ('fields.timesheet_format','fields','Timeliste format','Timesheet format'),
+      ('fields.format_xlsx','fields','Excel (XLSX)','Excel (XLSX)'),
+      ('fields.smtp_app_password','fields','SMTP App-passord','SMTP app password'),
+      ('placeholders.optional','placeholders','(valgfritt)','(optional)'),
+      ('help.smtp_hint','help','For Gmail/Outlook: Bruk app-spesifikt passord. Vi gjetter SMTP-server fra e-post.','For Gmail/Outlook: Use an app-specific password. SMTP server is inferred from email.'),
+      ('settings.invoice_reminder','settings','Aktiver påminnelse om fakturering','Enable invoice reminder'),
+      ('help.invoice_reminder','help','Motta automatisk påminnelse om å sende faktura ved månedsslutt.','Receive an automatic reminder to send invoices at month end.'),
+      ('settings.webhooks_integrations','settings','🔗 Webhook og Integrasjoner','🔗 Webhook & Integrations'),
+      ('fields.enable_webhook','fields','Aktiver webhook','Enable webhook'),
+      ('fields.webhook_url','fields','Webhook URL','Webhook URL'),
+      ('fields.google_sheets_url','fields','Google Sheets URL','Google Sheets URL'),
+      ('help.sheets_picker','help','Eller bruk \'Browse\' for å velge fra Google Drive','Or use \"Browse\" to pick from Google Drive'),
+      ('help.webhook_sheets','help','Webhook sender data til eksterne systemer. Sheets-URL for toveis synk.','Webhook sends data to external systems. Sheets URL for two-way sync.'),
+      ('settings.admin_system','settings','🔐 Admin og System','🔐 Admin & System'),
+      ('settings.admin_panel','settings','Admin Panel','Admin Panel'),
+      ('help.admin_panel','help','Tilgang til systemadministrasjon, brukeradministrasjon og analytics.','Access system administration, user management and analytics.'),
+      ('settings.gdpr_privacy','settings','GDPR og Personvern','GDPR & Privacy'),
+      ('help.gdpr','help','Eksporter dine data eller slett kontoen din (GDPR-rettigheter).','Export your data or delete your account (GDPR rights).'),
+      ('settings.save_all','settings','Lagre alle innstillinger','Save all settings'),
+      -- Admin CMS titles and fields
+      ('admin.cms.pages.title','admin','CMS Sider','CMS Pages'),
+      ('admin.cms.themes.title','admin','CMS Temaer','CMS Themes'),
+      ('admin.cms.media.title','admin','CMS Media','CMS Media'),
+      ('admin.cms.media.upload','admin','Last opp fil','Upload File'),
+      ('admin.cms.media.file_uploaded','admin','Fil lastet opp','File uploaded'),
+      ('admin.cms.media.file_deleted','admin','Fil slettet','File deleted'),
+      ('fields.page_id','fields','Side-ID','Page ID'),
+      ('fields.page_name','fields','Sidenavn','Page Name'),
+      ('fields.published','fields','Publisert','Published'),
+      ('fields.sections_json','fields','Seksjoner (JSON)','Sections (JSON)'),
+      ('fields.meta_json','fields','Meta (JSON)','Meta (JSON)'),
+      ('fields.theme_id','fields','Tema-ID','Theme ID'),
+      ('fields.theme_name','fields','Temanavn','Theme Name'),
+      ('fields.colors_json','fields','Farger (JSON)','Colors (JSON)'),
+      ('fields.typography_json','fields','Typografi (JSON)','Typography (JSON)'),
+      ('fields.spacing_json','fields','Spacing (JSON)','Spacing (JSON)'),
+      ('common.load','common','Last','Load'),
+      ('common.save','common','Lagre','Save'),
+      ('table.key','table','Nøkkel','Key'),
+      ('table.value','table','Verdi','Value'),
+      ('table.description','table','Beskrivelse','Description'),
+      -- Home page extra labels
+      ('fields.title_meeting','fields','Tittel / Møte','Title / Meeting'),
+      ('fields.project_client','fields','Prosjekt / Kunde','Project / Client'),
+      ('fields.place_mode','fields','Sted / Modus','Place / Mode'),
+      ('fields.notes','fields','Notater','Notes'),
+      ('fields.notes_optional','fields','Notater (valgfritt)','Notes (optional)'),
+      ('fields.date','fields','Dato','Date'),
+      ('fields.today','fields','I dag','Today'),
+      ('fields.yesterday','fields','I går','Yesterday'),
+      ('fields.in','fields','Inn','In'),
+      ('fields.out','fields','Ut','Out'),
+      ('fields.break_hours','fields','Pause (timer)','Break (hours)'),
+      ('fields.expense_coverage','fields','Utgiftsdekning (kr)','Expense coverage (NOK)'),
+      ('fields.month','fields','Måned','Month'),
+      ('filters.week','filters','Uke','Week'),
+      ('filters.month','filters','Måned','Month'),
+      ('filters.this_month','filters','Denne måneden','This month'),
+      ('filters.prev_month','filters','Forrige måned','Previous month'),
+      ('filters.this_year','filters','Dette året','This year'),
+      ('stats.total_hours_weekdays','stats','Totale timer (man–fre)','Total hours (Mon–Fri)'),
+      ('stats.work','stats','Arbeid','Work'),
+      ('stats.meetings','stats','Møter','Meetings'),
+      ('home.paid_break','home','Betalt pause','Paid break'),
+      ('home.unpaid_break','home','Ubetalt pause','Unpaid break'),
+      ('fields.hourly_rate','fields','Timesats (kr/t)','Hourly rate (NOK/hr)'),
+      ('stats.estimated_salary','stats','Estimert lønn (man–fre)','Estimated salary (Mon–Fri)'),
+      ('stats.expenses','stats','Utgiftsdekning','Expenses'),
+      ('stats.total_payout','stats','Total utbetaling','Total payout'),
+      ('fields.tax_percent','fields','Skatteprosent','Tax percent'),
+      ('stats.set_aside_tax','stats','Sett av til skatt','Set aside for tax'),
+      ('actions.reset_month','actions','Nullstill denne måneden','Reset this month'),
+      ('actions.archive_month','actions','Arkiver denne måneden','Archive this month'),
+      ('actions.reset_all','actions','Nullstill hele datasettet','Reset entire dataset'),
+      ('home.month_reset','home','Denne måneden nullstilt','This month has been reset'),
+      ('home.month_archived','home','Måneden er arkivert','Month archived'),
+      ('home.dataset_reset','home','Hele datasettet er nullstilt','Entire dataset has been reset'),
+      ('common.select_all','common','Velg alle','Select all'),
+      ('common.clear_all','common','Fjern alle','Clear all'),
+      ('table.date','table','Dato','Date'),
+      ('table.in','table','Inn','In'),
+      ('table.out','table','Ut','Out'),
+      ('table.break','table','Pause','Break'),
+      ('table.activity','table','Aktivitet','Activity'),
+      ('table.title','table','Tittel','Title'),
+      ('table.project','table','Prosjekt','Project'),
+      ('table.place','table','Sted','Place'),
+      ('table.notes','table','Notater','Notes'),
+      ('table.expenses','table','Utgifter','Expenses'),
+      ('helpers.out_after_in','helpers','Ut må være etter Inn','End must be after Start'),
+      -- CSV Import / Webhook / Bulk / Reports / Timesheet / Landing
+      ('import.format_hint','import','Format: Dato, Inn, Ut, Pause, Aktivitet, Tittel, Prosjekt, Sted, Notater','Format: Date, In, Out, Break, Activity, Title, Project, Place, Notes'),
+      ('import.choose_file','import','Velg fil','Choose file'),
+      ('import.no_file','import','Ingen fil valgt','No file chosen'),
+      ('import.total','import','Totalt','Total'),
+      ('import.invalid','import','Ugyldige','Invalid'),
+      ('import.ignore_weekend_on','import','Ignorer helg: På','Ignore weekends: On'),
+      ('import.ignore_weekend_off','import','Ignorer helg: Av','Ignore weekends: Off'),
+      ('import.import','import','Importer','Import'),
+      ('import.none','import','Ingen rader å importere','No rows to import'),
+      ('import.done','import','Import fullført','Import completed'),
+      ('import.rows','import','rader','rows'),
+      ('import.failed','import','Import feilet','Import failed'),
+      ('import.from_sheets','import','Importer fra Google Sheets','Import from Google Sheets'),
+      ('import.sheet_note','import','Oppsett lagres i nettleseren. For import må arket være delt "Anyone with the link" eller publisert.','Settings are saved in your browser. For import, the sheet must be shared "Anyone with the link" or published.'),
+      ('sync.enable_on','sync','Aktiver synk: På','Enable sync: On'),
+      ('sync.enable_off','sync','Aktiver synk: Av','Enable sync: Off'),
+      ('webhook.send_test','webhook','Send testrad','Send test row'),
+      ('webhook.test_sent','webhook','Webhook testrad sendt','Webhook test row sent'),
+      ('bulk.insert_month','bulk','Legg inn for hele måneden','Insert for the whole month'),
+      ('bulk.no_weekdays','bulk','Ingen hverdager i valgt måned','No weekdays in selected month'),
+      ('bulk.inserted','bulk','Lagt inn','Inserted'),
+      ('bulk.weekdays','bulk','hverdager','weekdays'),
+      ('reports.composer_title','reports','Rapportsammenstilling','Report composition'),
+      ('reports.template_label','reports','Rapportmal','Report template'),
+      ('reports.template_auto','reports','Automatisk (basert på prosjekt)','Automatic (based on project)'),
+      ('reports.template_standard','reports','Standard','Standard'),
+      ('reports.template_social','reports','Miljøarbeider / Sosialarbeider','Social worker'),
+      ('reports.description','reports','Generer en profesjonell månedsrapport i Google Docs med prosjektinfo, statistikk og detaljert logg.','Generate a professional monthly report in Google Docs with project info, stats, and detailed log.'),
+      ('reports.write','reports','Skriv rapport','Write report'),
+      ('reports.privacy_header','reports','⚠️ Personvernretningslinjer for miljøarbeider','⚠️ Privacy guidelines for social worker'),
+      ('reports.intro_optional','reports','Innledning (valgfritt)','Introduction (optional)'),
+      ('reports.notes_optional','reports','Tilleggsnotater (valgfritt)','Additional notes (optional)'),
+      ('reports.remove_names_first','reports','Fjern navn før generering','Remove names before generating'),
+      ('reports.generate_docs','reports','Generer Google Docs rapport','Generate Google Docs report'),
+      ('reports.preview_changes','reports','🔍 Forhåndsvisning av endringer','🔍 Preview changes'),
+      ('reports.accept_changes','reports','✅ Godta endringer','✅ Accept changes'),
+      ('reports.names_replaced','reports','Navn erstattet med generelle betegnelser','Names replaced with generic terms'),
+      ('common.generating','common','Genererer...','Generating...'),
+      ('timesheet.sent_via_gmail','timesheet','Timeliste sendt via Gmail','Timesheet sent via Gmail'),
+      ('timesheet.send_failed','timesheet','Kunne ikke sende','Could not send'),
+      ('timesheet.sent_via_smtp','timesheet','Timeliste sendt via SMTP','Timesheet sent via SMTP'),
+      ('gmail.connected','gmail','Google-konto tilkoblet','Google account connected'),
+      ('timesheet.method','timesheet','Sendemetode','Send method'),
+      ('timesheet.gmail_recommended','timesheet','Gmail (anbefalt)','Gmail (recommended)'),
+      ('fields.format','fields','Format','Format'),
+      ('timesheet.send_via_gmail','timesheet','Send via Gmail','Send via Gmail'),
+      ('timesheet.gmail_note','timesheet','E-posten sendes fra din tilkoblede Google-konto.','The email is sent from your connected Google account.'),
+      ('fields.sender_email','fields','Avsender e-post','Sender email'),
+      ('timesheet.send_via_smtp','timesheet','Send via SMTP','Send via SMTP'),
+      ('timesheet.smtp_mode','timesheet','SMTP-modus: ','SMTP mode: '),
+      ('timesheet.connect_google_hint','timesheet','Koble til Google-kontoen din for enklere sending, eller ','Connect your Google account for easier sending, or '),
+      ('timesheet.smtp_hint','timesheet','Vi gjetter SMTP basert på e-post (Gmail/Outlook/Yahoo/iCloud/Proton m.fl.). Bruk app-passord for Gmail/Outlook.','We infer SMTP from the email (Gmail/Outlook/Yahoo/iCloud/Proton etc.). Use an app password for Gmail/Outlook.'),
+      ('landing.loading','landing','Laster...','Loading...'),
+      ('landing.error','landing','Kunne ikke laste siden','Failed to load page'),
+      ('landing.contact_us','landing','Kontakt oss','Contact us'),
+      ('landing.email','landing','E-post','Email'),
+      ('landing.phone','landing','Telefon','Phone'),
+      ('landing.address','landing','Adresse','Address'),
+      ('landing.form_success','landing','Takk! Vi har mottatt meldingen din.','Thanks! We have received your message.'),
+      ('landing.form_failed','landing','Kunne ikke sende','Could not send'),
+      ('common.send','common','Send','Send'),
+      ('landing.privacy','landing','Personvern','Privacy'),
+      ('admin.cms.translations.title','admin','CMS Oversettelser','CMS Translations'),
+      ('common.save_all','common','Lagre alle','Save All'),
+      ('common.reload','common','Last på nytt','Reload'),
+      ('table.category','table','Kategori','Category'),
+      ('confirm.delete_rows','confirm','Sikker på at du vil slette','Are you sure you want to delete'),
+      ('table.rows','table','rader','rows'),
+      ('home.stamp_recorded','home','Stempling registrert','Stamp recorded'),
+      ('home.stamped_in','home','Stemplet inn','Stamped in'),
+      ('home.stamped_out','home','Stemplet ut','Stamped out'),
+      ('home.row_added','home','Rad lagt til','Row added'),
+      ('home.row_deleted','home','Rad slettet','Row deleted'),
+      ('home.change_saved','home','Endring lagret','Change saved'),
+      ('home.row_updated','home','Rad oppdatert','Row updated'),
+      ('home.copied_previous_row','home','Forrige rad kopiert','Copied previous row'),
+      ('home.no_previous_rows','home','Ingen tidligere rader funnet','No previous rows found'),
+      ('aria.loading','aria','Laster data...','Loading data...'),
+      ('aria.logs_loaded','aria','loggføringer lastet for','logs loaded for'),
+      ('reports.names_warning_title','reports','🚨 ADVARSEL: Mulige navn oppdaget!','🚨 WARNING: Possible names detected!'),
+      ('reports.names_warning_text','reports','Teksten din ser ut til å inneholde navn som kan identifisere personer:','Your text appears to contain names that can identify individuals:'),
+      ('reports.names_auto_replace_question','reports','Skal vi automatisk erstatte disse navnene med generelle betegnelser?','Automatically replace these names with generic terms?'),
+      ('reports.fix_auto_button','reports','✅ Fiks automatisk','✅ Fix automatically'),
+      ('reports.example_replacement','reports','Eksempel','Example'),
+      ('reports.example_boy','reports','Gutten','the boy'),
+      ('reports.example_girl','reports','Jenta','the girl'),
+      ('reports.example_user','reports','Brukeren','the user'),
+      ('reports.cannot_generate_with_pii','reports','⚠️ Kan ikke generere rapport med personidentifiserbar informasjon','⚠️ Cannot generate report with personally identifiable information'),
+      ('reports.names_to_replace','reports','Følgende navn vil bli erstattet med generelle betegnelser:','The following names will be replaced with generic terms:'),
+      ('reports.text_with_changes','reports','Tekst med endringer markert:','Text with changes highlighted:'),
+      -- Project info / Tooltips
+      ('project_info.consultant','project_info','Konsulent','Consultant'),
+      ('project_info.company','project_info','Bedrift','Company'),
+      ('project_info.client','project_info','Oppdragsgiver','Client'),
+      ('project_info.measure','project_info','Tiltak','Initiative'),
+      ('project_info.period','project_info','Periode','Period'),
+      ('tooltips.switch_theme','tooltips','Bytt tema','Switch theme'),
+      ('tooltips.view_reports','tooltips','Se rapporter','View reports'),
+      ('tooltips.edit_project_info','tooltips','Rediger prosjektinformasjon','Edit project info'),
+      ('tooltips.export_pdf','tooltips','Eksporter PDF','Export PDF'),
+      -- New tooltips/aria for stamping and setup labels
+      ('tooltips.stamp_in','tooltips','Stemple inn','Stamp in'),
+      ('tooltips.stamp_out','tooltips','Stemple ut','Stamp out'),
+      ('aria.stamp_in','aria','Stemple inn','Stamp in'),
+      ('aria.stamp_out','aria','Stemple ut','Stamp out'),
+      ('aria.time_since_stamp_in','aria','Tid siden du stemplet inn','Time since you stamped in'),
+      ('aria.company_search','aria','Bedrift søk','Company search'),
+      ('aria.update_project_info','aria','Oppdater prosjektinfo','Update project info'),
+      ('aria.create_project','aria','Opprett prosjekt','Create project'),
+      ('home.stamp_in','home','Stemple INN','Stamp IN'),
+      ('home.stamp_out','home','Stemple UT','Stamp OUT'),
+      ('quick_templates.templates_header','quick_templates','MALER:','TEMPLATES:'),
+      ('home.choose_template','home','Velg mal eller aktivitet:','Choose template or activity:'),
+      ('stats.work','stats','Arbeid','Work'),
+      ('stats.meetings','stats','Møte','Meeting'),
+      ('setup.company_search_label','setup','Hvilken bedrift jobber du for?','Which company do you work for?'),
+      ('setup.company_search_placeholder','setup','Søk etter bedrift...','Search for company...'),
+      ('setup.role_label','setup','Tiltak / Rolle','Initiative / Role'),
+      ('setup.role_placeholder','setup','Velg eller skriv din rolle...','Choose or type your role...'),
+      ('setup.role_helper','setup','Velg rolle fra listen eller skriv egen. Påvirker rapportmal.','Choose from the list or type your own. Affects report template.'),
+      ('setup.period_label','setup','Periode','Period'),
+      ('setup.period_placeholder','setup','f.eks. Q1 2025','e.g., Q1 2025'),
+      ('setup.client_id_label','setup','Klient ID / Saks nr','Client ID / Case no.'),
+      ('setup.client_id_aria','setup','Klient ID eller saksnummer','Client ID or case number'),
+      ('setup.email_hint','setup','E-postinnstillinger konfigureres i hovedvinduet under innstillinger.','Email settings are configured in the main window under Settings.'),
+      ('setup.update_btn','setup','Oppdater','Update'),
+      ('setup.create_btn','setup','Opprett prosjekt','Create project'),
+      ('common.cancel','common','Avbryt','Cancel'),
+      -- Privacy guidelines bullets/text
+      ('reports.important','reports','Viktig','Important'),
+      ('reports.no_personal_data','reports','Rapporter skal ikke inneholde personopplysninger.','Reports must not contain personal data.'),
+      ('reports.no_names','reports','Ikke bruk navn på klienter','Do not use clients\' names'),
+      ('reports.use_generic_terms','reports','Bruk heller generelle betegnelser: "Gutten", "Jenta", "Brukeren", "Deltakeren"','Use generic terms instead: "the boy", "the girl", "the user", "the participant"'),
+      ('reports.avoid_identifying_details','reports','Unngå detaljer som kan identifisere personer (alder, adresse, spesifikke situasjoner)','Avoid details that can identify individuals (age, address, specific situations)'),
+      ('reports.focus_on_activities_development','reports','Fokuser på aktiviteter og utvikling, ikke identitet','Focus on activities and development, not identity'),
+      ('reports.consider_anonymizing_places','reports','Vurder anonymisering av steder hvis nødvendig','Consider anonymizing places if needed'),
+      ('reports.gdpr_footer','reports','Disse retningslinjene sikrer GDPR-etterlevelse og beskytter klientenes personvern.','These guidelines ensure GDPR compliance and protect client privacy.'),
+      ('reports.template_hint_auto','reports','Malen velges automatisk basert på din rolle i prosjektet.','Template is chosen automatically based on your project role.'),
+      ('reports.template_hint_standard','reports','Standard rapport med fokus på arbeidstimer og møter.','Standard report focused on work hours and meetings.'),
+      ('reports.template_hint_social','reports','Aktivitetsrapport med fokus på klientmøter og sosiale aktiviteter.','Activity report focused on client meetings and social activities.'),
+      -- Composer placeholders and list
+      ('reports.intro_placeholder_social','reports','Skriv en innledning til rapporten...\n\nEksempel: I løpet av denne perioden har jeg jobbet med flere brukere gjennom ulike aktiviteter. Fokuset har vært på sosial utvikling og hverdagsmestring.\n\nHusk: Unngå navn og identifiserbar informasjon.','Write an introduction to the report...\n\nExample: During this period I have worked with several users through various activities. The focus has been on social development and everyday coping.\n\nRemember: Avoid names and identifiable information.'),
+      ('reports.intro_placeholder_standard','reports','Skriv en innledning til rapporten... \n\nEksempel: Dette er en oppsummering av mine aktiviteter i løpet av måneden. Jeg har fokusert på...','Write an introduction to the report... \n\nExample: This is a summary of my activities during the month. I have focused on...'),
+      ('reports.intro_hint','reports','Innledningen vises øverst i rapporten, før prosjektinformasjonen.','The introduction appears at the top of the report, before the project information.'),
+      ('reports.intro_anonymize_hint','reports','Husk å anonymisere all informasjon.','Remember to anonymize all information.'),
+      ('reports.will_include','reports','Rapporten vil inneholde:','The report will include:'),
+      ('reports.includes_title_month','reports','Tittel og måned','Title and month'),
+      ('reports.includes_custom_intro','reports','Din egendefinerte innledning','Your custom introduction'),
+      ('reports.includes_project_info','reports','Prosjektinformasjon','Project information'),
+      ('reports.includes_summary','reports','Sammendrag (timer, dager, aktiviteter)','Summary (hours, days, activities)'),
+      ('reports.includes_detailed_log','reports','Detaljert logg med alle registreringer','Detailed log with all entries'),
+      ('reports.includes_custom_notes','reports','Dine tilleggsnotater','Your additional notes'),
+      ('reports.notes_placeholder_social','reports','Legg til notater på slutten av rapporten...\n\nEksempel: Generelle observasjoner om fremgang, utfordringer i arbeidet, behov for oppfølging, samarbeidspartnere involvert, etc.\n\nHusk: Ikke inkluder personidentifiserbar informasjon.','Add notes at the end of the report...\n\nExample: General observations about progress, challenges in the work, need for follow-up, partners involved, etc.\n\nRemember: Do not include personally identifiable information.'),
+      ('reports.notes_placeholder_standard','reports','Legg til notater på slutten av rapporten...\n\nEksempel: Refleksjoner, utfordringer, planlagte tiltak for neste måned, etc.','Add notes at the end of the report...\n\nExample: Reflections, challenges, planned actions for next month, etc.'),
+      ('reports.notes_hint','reports','Notater vises nederst i rapporten, etter den detaljerte loggen.','Notes appear at the bottom of the report, after the detailed log.'),
+      ('reports.notes_social_hint','reports','Fokuser på generelle mønstre og utvikling, ikke individuelle detaljer.','Focus on general patterns and development, not individual details.'),
+      ('reports.docs_footer','reports','Rapporten opprettes som et nytt Google Docs-dokument som du kan redigere videre.','The report is created as a new Google Docs document that you can further edit.'),
+      -- Additional common/aria/home keys
+      ('common.save_failed','common','Feil ved lagring','Save failed'),
+      ('common.deletion_undone','common','Sletting angret','Deletion undone'),
+      ('common.change_undone','common','Endring angret','Change undone'),
+      ('common.undo','common','Angre','Undo'),
+      ('aria.save_changes','aria','Lagre endringer','Save changes'),
+      ('aria.cancel_edit','aria','Avbryt redigering','Cancel editing'),
+      ('aria.edit_row','aria','Rediger rad','Edit row'),
+      ('aria.archive_row','aria','Arkiver rad','Archive row'),
+      ('aria.restore_row','aria','Gjenopprett rad','Restore row'),
+      ('aria.use_template','aria','Bruk mal','Use template'),
+      ('home.row_archived','home','Rad arkivert','Row archived'),
+      ('home.row_restored','home','Rad gjenopprettet','Row restored'),
+      ('home.no_rows_this_month','home','Ingen rader i denne måneden enda.','No rows in this month yet.'),
+      ('reports.connect_google','reports','Koble til Google-kontoen din for å generere rapporter.','Connect your Google account to generate reports.'),
+      -- Templates manager and helpers
+      ('templates.header','templates','Maler for hurtigstempling','Quick stamping templates'),
+      ('templates.subheader','templates','Opprett maler for aktiviteter du gjør ofte','Create templates for activities you do often'),
+      ('templates.new','templates','Ny mal','New template'),
+      ('templates.edit_title','templates','Rediger mal','Edit template'),
+      ('templates.new_title','templates','Ny mal','New template'),
+      ('templates.name_label','templates','Navn på mal','Template name'),
+      ('templates.name_placeholder','templates','F.eks. "Arbeid på kontoret"','e.g., "Work at the office"'),
+      ('templates.name_helper','templates','Dette vises i listen over maler','Shown in the template list'),
+      ('templates.saved','templates','Mal lagret','Template saved'),
+      ('templates.deleted','templates','Mal slettet','Template deleted'),
+      ('confirm.delete_template','confirm','Sikker på at du vil slette','Are you sure you want to delete'),
+      ('common.name_activity_required','common','Navn og aktivitet er påkrevd','Name and activity are required'),
+      ('helpers.eg_title_meeting','helpers','F.eks. "Prosjektmøte"','e.g., "Project meeting"'),
+      ('helpers.eg_project_client','helpers','F.eks. "Kunde A"','e.g., "Client A"'),
+      ('helpers.eg_place_mode','helpers','F.eks. "Kontor", "Hjemmekontor", "Felt"','e.g., "Office", "Home office", "Field"'),
+      ('setup.org_number','setup','Org.nr:','Org. no:'),
+      ('templates.none','templates','Ingen maler enda. Klikk "Ny mal" for å opprette din første mal.','No templates yet. Click "New template" to create your first.'),
+      ('aria.delete_template','aria','Slett mal','Delete template'),
+      ('common.save','common','Lagre','Save'),
+      ('common.error','common','Feil','Error'),
+      ('errors.save_project_info_failed','errors','Kunne ikke lagre prosjektinfo','Could not save project info'),
+      -- Mobile nav and quick actions
+      ('nav.home','nav','Hjem','Home'),
+      ('nav.logs','nav','Logger','Logs'),
+      ('nav.stats','nav','Statistikk','Stats'),
+      ('nav.settings','nav','Innstillinger','Settings'),
+      ('aria.go_home','aria','Gå til hjemside','Go to home'),
+      ('aria.view_logs','aria','Se alle logger','View all logs'),
+      ('aria.view_stats','aria','Se statistikk','View statistics'),
+      ('aria.open_settings','aria','Åpne innstillinger','Open settings'),
+      ('aria.quick_actions','aria','Hurtighandlinger','Quick actions'),
+      ('mobile.quick.stamp_work','mobile','Stemple arbeid','Stamp work'),
+      ('mobile.quick.stamp_meeting','mobile','Stemple møte','Stamp meeting'),
+      ('mobile.quick.manual_entry','mobile','Manuell registrering','Manual entry'),
+      ('mobile.quick.import_csv','mobile','Importer CSV','Import CSV'),
+      -- Reports page keys
+      ('common.back','common','Tilbake','Back'),
+      ('common.unspecified','common','Uspesifisert','Unspecified'),
+      ('stats.hours','stats','Timer','Hours'),
+      ('reports.hours_per_day','reports','Timer per dag','Hours per day'),
+      ('reports.activity_breakdown','reports','Aktivitetsfordeling','Activity breakdown'),
+      ('reports.hours_per_project','reports','Timer per prosjekt','Hours per project'),
+      -- Sheets picker keys
+      ('sheets_picker.failed_load','sheets_picker','Kunne ikke laste Google Picker API','Failed to load Google Picker API'),
+      ('sheets_picker.not_ready','sheets_picker','Picker er ikke klar enda','Picker is not ready yet'),
+      ('sheets_picker.token_failed','sheets_picker','Kunne ikke hente tilgangstoken. Koble Google-konto først.','Failed to get access token. Please connect your Google account first.'),
+      ('sheets_picker.open_failed','sheets_picker','Kunne ikke åpne velgeren','Failed to open picker'),
+      ('common.opening','common','Åpner...','Opening...'),
+      -- Settings drawer extras
+      ('settings.section.language','settings','🌐 Språk','🌐 Language'),
+      ('settings.section.pay_tax','settings','💰 Lønn og Skatt','💰 Pay & Tax'),
+      ('settings.section.email_timesheet','settings','📧 E-post og Timeliste','📧 Email & Timesheet'),
+      ('settings.saved_all','settings','Alle innstillinger lagret','All settings saved'),
+      ('fields.paid_break','fields','Betalt pause','Paid break'),
+      ('help.paid_break_hint','help','Ved betalt pause trekkes ikke pausetid fra lønnsberegningen.','When paid break is on, break time is not deducted from payroll.'),
+      ('placeholders.sender_email','placeholders','din@epost.no','you@example.com'),
+      ('common.selected','common','Valgt','Selected'),
+      -- Reports KPIs
+      ('stats.total_hours','stats','Total timer','Total hours'),
+      ('stats.work_days','stats','Arbeidsdager','Work days'),
+      ('stats.meetings_total','stats','Møter','Meetings'),
+      ('stats.projects','stats','Prosjekter','Projects'),
+      ('stats.hours_abbr','stats','t','h'),
+      -- Case reports page
+      ('portal.login_required_reports','portal','Du må være logget inn i bedriftsportalen for å skrive saksrapporter.','You must be logged into the company portal to write case reports.'),
+      ('portal.login_here','portal','Logg inn her','Log in here'),
+      ('case_reports.submit_confirm','case_reports','Send inn rapporten for godkjenning?','Submit the report for approval?'),
+      ('case_reports.my_reports','case_reports','Mine saksrapporter','My case reports'),
+      ('case_reports.rejected_prefix','case_reports','Avslått:','Rejected:'),
+      ('case_reports.edit_title','case_reports','Rediger rapport','Edit report'),
+      ('case_reports.new_title','case_reports','Ny saksrapport','New case report'),
+      ('case_reports.case','case_reports','Sak','Case'),
+      ('fields.month','fields','Måned','Month'),
+      ('case_reports.background','case_reports','Bakgrunn for tiltaket','Background for the initiative'),
+      ('case_reports.actions_label','case_reports','Arbeid og tiltak som er gjennomført','Work and measures carried out'),
+      ('case_reports.progress','case_reports','Fremgang og utvikling','Progress and development'),
+      ('case_reports.challenges','case_reports','Utfordringer','Challenges'),
+      ('case_reports.factors','case_reports','Faktorer som påvirker','Influencing factors'),
+      ('case_reports.assessment','case_reports','Vurdering','Assessment'),
+      ('case_reports.recommendations','case_reports','Anbefalinger','Recommendations'),
+      ('case_reports.save_draft','case_reports','Lagre utkast','Save draft'),
+      ('case_reports.status.draft','case_reports','Utkast','Draft'),
+      ('case_reports.status.submitted','case_reports','Sendt inn','Submitted'),
+      ('case_reports.status.approved','case_reports','Godkjent','Approved'),
+      ('case_reports.status.rejected','case_reports','Avslått','Rejected'),
+      ('common.edit','common','Rediger','Edit'),
+      ('common.submit','common','Send inn','Submit'),
+      ('common.update','common','Oppdater','Update'),
+      ('case_reports.saved','case_reports','Rapport lagret','Report saved'),
+      ('case_reports.submitted','case_reports','Rapport sendt inn','Report submitted'),
+      ('case_reports.submit_failed','case_reports','Kunne ikke sende inn','Could not submit'),
+      ('case_reports.edit_opened','case_reports','Utkast åpnet for redigering','Draft opened for editing'),
+      -- Portal invites toasts
+      ('portal.invites.created_toast','portal','Invitasjon opprettet','Invitation created'),
+      ('portal.invites.create_failed','portal','Kunne ikke opprette invitasjon','Could not create invitation'),
+      ('portal.invites.deleted','portal','Invitasjon slettet','Invitation deleted'),
+      ('portal.invites.delete_failed','portal','Kunne ikke slette invitasjon','Could not delete invitation'),
+      ('portal.invites.resend_failed','portal','Kunne ikke sende på nytt','Could not resend invitation'),
+      -- Admin companies/users toasts
+      ('admin.companies.created','admin','Company created','Company created'),
+      ('admin.companies.create_failed','admin','Failed to create company','Failed to create company'),
+      ('admin.companies.user_added','admin','User added to company','User added to company'),
+      ('admin.companies.user_add_failed','admin','Failed to add user','Failed to add user'),
+      ('admin.companies.user_removed','admin','User removed','User removed'),
+      ('admin.companies.user_remove_failed','admin','Failed to remove user','Failed to remove user'),
+      ('admin.companies.user_approved','admin','User approved','User approved'),
+      ('admin.companies.user_approve_failed','admin','Failed to approve user','Failed to approve user'),
+      ('admin.users.deleted','admin','User deleted','User deleted'),
+      ('admin.users.delete_failed','admin','Failed to delete user','Failed to delete user'),
+      ('admin.companies.load_failed','admin','Failed to load companies','Failed to load companies'),
+      ('admin.companies.load_users_failed','admin','Failed to load company users','Failed to load company users'),
+      ('admin.companies.remove_user','admin','Remove user','Remove user'),
+      ('admin.companies.approve_user','admin','Approve user','Approve user'),
+      ('admin.users.load_failed','admin','Failed to load users','Failed to load users'),
+      ('admin.companies.remove_user_confirm','admin','Er du sikker på at du vil fjerne denne brukeren fra selskapet?','Are you sure you want to remove this user from the company?'),
+      ('admin.companies.user_removed_undo','admin','Du slettet nettopp denne brukeren. Angre?','You just removed this user. Undo?'),
+      ('admin.companies.user_restored','admin','Bruker gjenopprettet','User restored'),
+      -- Admin users soft delete/restore
+      ('admin.users.archived','admin','User archived','User archived'),
+      ('admin.users.archive_failed','admin','Failed to archive user','Failed to archive user'),
+      ('admin.users.restored','admin','User restored','User restored'),
+      ('admin.users.restore_failed','admin','Failed to restore user','Failed to restore user'),
+      ('admin.users.archive_title','admin','Archive User','Archive User'),
+      ('admin.users.archive_confirm','admin','Are you sure you want to archive this user? You can undo shortly or restore later.','Are you sure you want to archive this user? You can undo shortly or restore later.'),
+      ('admin.users.archive_user','admin','Archive user','Archive user'),
+      ('common.archive','common','Arkiver','Archive'),
+      ('admin.users.show_archived','admin','Show archived','Show archived'),
+      ('admin.users.restore_user','admin','Restore user','Restore user'),
+      ('admin.users.filter_status','admin','Status filter','Status filter'),
+      ('admin.users.status_active','admin','Active','Active'),
+      ('admin.users.status_archived','admin','Archived','Archived'),
+      ('admin.users.status_all','admin','All','All'),
+      ('admin.users.archived_badge','admin','Archived','Archived')
+    ON CONFLICT (translation_key) DO NOTHING
+  `;
+
   // Guarded index creation for legacy DBs (only if columns exist)
   await pool.query(`
     DO $$ BEGIN
@@ -608,6 +1235,12 @@ async function initTables(){
         CREATE INDEX IF NOT EXISTS idx_cms_contact_submissions_page_id ON cms_contact_submissions(page_id);
       END IF;
     END $$;
+  `);
+  // Ensure archived column exists on user_settings for soft-delete functionality
+  await pool.query(`
+    ALTER TABLE user_settings
+    ADD COLUMN IF NOT EXISTS archived BOOLEAN NOT NULL DEFAULT FALSE;
+    CREATE INDEX IF NOT EXISTS idx_user_settings_archived ON user_settings(archived);
   `);
   console.log("✅ Tables initialized with persistence schema");
   
@@ -1175,6 +1808,7 @@ app.get("/api/settings", async (req, res) => {
         invoice_reminder_active: false,
         theme_mode: 'dark',
         view_mode: 'month',
+        language: 'no',
       });
     }
     res.json(result.rows[0]);
@@ -1192,7 +1826,7 @@ app.post("/api/settings", async (req, res) => {
       paid_break, tax_pct, hourly_rate,
       timesheet_sender, timesheet_recipient, timesheet_format,
       smtp_app_password, webhook_active, webhook_url, sheet_url, month_nav,
-      invoice_reminder_active, theme_mode, view_mode
+      invoice_reminder_active, theme_mode, view_mode, language
     } = req.body;
     
     const result = await pool.query(`
@@ -1200,8 +1834,8 @@ app.post("/api/settings", async (req, res) => {
         user_id, paid_break, tax_pct, hourly_rate,
         timesheet_sender, timesheet_recipient, timesheet_format,
         smtp_app_password, webhook_active, webhook_url, sheet_url, month_nav, 
-        invoice_reminder_active, theme_mode, view_mode, updated_at
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, NOW())
+        invoice_reminder_active, theme_mode, view_mode, language, updated_at
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, NOW())
       ON CONFLICT (user_id) DO UPDATE SET
         paid_break = COALESCE($2, user_settings.paid_break),
         tax_pct = COALESCE($3, user_settings.tax_pct),
@@ -1217,11 +1851,12 @@ app.post("/api/settings", async (req, res) => {
         invoice_reminder_active = COALESCE($13, user_settings.invoice_reminder_active),
         theme_mode = COALESCE($14, user_settings.theme_mode),
         view_mode = COALESCE($15, user_settings.view_mode),
+        language = COALESCE($16, user_settings.language),
         updated_at = NOW()
       RETURNING *
     `, [userId, paid_break, tax_pct, hourly_rate, timesheet_sender, timesheet_recipient,
         timesheet_format, smtp_app_password, webhook_active, webhook_url, sheet_url, month_nav,
-        invoice_reminder_active, theme_mode, view_mode]);
+        invoice_reminder_active, theme_mode, view_mode, language]);
     
     res.json(result.rows[0]);
   } catch (e) {
@@ -3111,7 +3746,7 @@ app.get('/api/company/invites/accept', async (req, res) => {
 // GET /api/admin/users - List all users with stats
 app.get("/api/admin/users", authenticateAdmin, requireAdminRole('super_admin', 'admin', 'moderator'), async (req, res) => {
   try {
-    const { search, limit = 50, offset = 0 } = req.query;
+    const { search, limit = 50, offset = 0, archived } = req.query;
     
     let query = `
       SELECT 
@@ -3119,6 +3754,7 @@ app.get("/api/admin/users", authenticateAdmin, requireAdminRole('super_admin', '
         us.created_at as user_since,
         us.hourly_rate,
         us.theme_mode,
+        us.archived as archived,
         COUNT(DISTINCT lr.id) as total_logs,
         COUNT(DISTINCT pi.id) as total_projects,
         MAX(lr.date) as last_activity_date
@@ -3129,21 +3765,51 @@ app.get("/api/admin/users", authenticateAdmin, requireAdminRole('super_admin', '
     
     const params = [];
     if (search) {
-      query += ` WHERE us.user_id ILIKE $1`;
+      if (archived === 'true') {
+        query += ` WHERE us.archived = TRUE AND us.user_id ILIKE $1`;
+      } else if (archived === 'any') {
+        query += ` WHERE us.user_id ILIKE $1`;
+      } else {
+        query += ` WHERE us.archived = FALSE AND us.user_id ILIKE $1`;
+      }
       params.push(`%${search}%`);
+    } else {
+      if (archived === 'true') {
+        query += ` WHERE us.archived = TRUE`;
+      } else if (archived === 'any') {
+        // no filter
+      } else {
+        query += ` WHERE us.archived = FALSE`;
+      }
     }
     
-    query += ` GROUP BY us.user_id, us.created_at, us.hourly_rate, us.theme_mode ORDER BY us.created_at DESC LIMIT $${params.length + 1} OFFSET $${params.length + 2}`;
+    query += ` GROUP BY us.user_id, us.created_at, us.hourly_rate, us.theme_mode, us.archived ORDER BY us.created_at DESC LIMIT $${params.length + 1} OFFSET $${params.length + 2}`;
     params.push(limit, offset);
     
     const result = await pool.query(query, params);
     
     // Get total count
     let countQuery = 'SELECT COUNT(DISTINCT user_id) as total FROM user_settings';
+    const countParams = [];
     if (search) {
-      countQuery += ' WHERE user_id ILIKE $1';
+      if (archived === 'true') {
+        countQuery += ' WHERE archived = TRUE AND user_id ILIKE $1';
+      } else if (archived === 'any') {
+        countQuery += ' WHERE user_id ILIKE $1';
+      } else {
+        countQuery += ' WHERE archived = FALSE AND user_id ILIKE $1';
+      }
+      countParams.push(`%${search}%`);
+    } else {
+      if (archived === 'true') {
+        countQuery += ' WHERE archived = TRUE';
+      } else if (archived === 'any') {
+        // no filter
+      } else {
+        countQuery += ' WHERE archived = FALSE';
+      }
     }
-    const countResult = await pool.query(countQuery, search ? [`%${search}%`] : []);
+    const countResult = await pool.query(countQuery, countParams);
     
     res.json({
       users: result.rows,
@@ -3187,6 +3853,32 @@ app.get("/api/admin/users/:userId", authenticateAdmin, requireAdminRole('super_a
   } catch (e) {
     console.error('Admin user detail error:', e);
     res.status(500).json({ error: 'Failed to fetch user details', details: String(e) });
+  }
+});
+
+// PATCH /api/admin/users/:userId/archive - Soft-archive user
+app.patch("/api/admin/users/:userId/archive", authenticateAdmin, requireAdminRole('super_admin'), async (req, res) => {
+  try {
+    const { userId } = req.params;
+    await pool.query('UPDATE user_settings SET archived = TRUE, updated_at = NOW() WHERE user_id = $1', [userId]);
+    await logAdminAction(req.adminUser.id, 'user_archived', 'user', userId, {}, req.ip);
+    res.json({ success: true, archived: true });
+  } catch (e) {
+    console.error('Admin user archive error:', e);
+    res.status(500).json({ error: 'Failed to archive user', details: String(e) });
+  }
+});
+
+// PATCH /api/admin/users/:userId/restore - Restore archived user
+app.patch("/api/admin/users/:userId/restore", authenticateAdmin, requireAdminRole('super_admin'), async (req, res) => {
+  try {
+    const { userId } = req.params;
+    await pool.query('UPDATE user_settings SET archived = FALSE, updated_at = NOW() WHERE user_id = $1', [userId]);
+    await logAdminAction(req.adminUser.id, 'user_restored', 'user', userId, {}, req.ip);
+    res.json({ success: true, archived: false });
+  } catch (e) {
+    console.error('Admin user restore error:', e);
+    res.status(500).json({ error: 'Failed to restore user', details: String(e) });
   }
 });
 
@@ -3660,6 +4352,21 @@ app.delete("/api/admin/cms/media/:id", authenticateAdmin, requireAdminRole('supe
   } catch (e) {
     console.error('CMS media deletion error:', e);
     res.status(500).json({ error: 'Failed to delete media', details: String(e) });
+  }
+});
+
+// ===== CMS PUBLIC TRANSLATIONS (READ-ONLY) =====
+app.get("/api/cms/translations", async (req, res) => {
+  try {
+    const result = await pool.query('SELECT translation_key as key, category, no, en FROM cms_translations ORDER BY category, translation_key');
+    const out = result.rows.reduce((acc, r) => {
+      acc[r.key] = { key: r.key, category: r.category, no: r.no, en: r.en };
+      return acc;
+    }, {});
+    res.json(out);
+  } catch (e) {
+    console.error('Public translations fetch error:', e);
+    res.status(500).json({ error: 'Failed to fetch translations', details: String(e) });
   }
 });
 

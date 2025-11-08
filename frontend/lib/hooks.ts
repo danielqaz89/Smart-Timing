@@ -17,13 +17,9 @@ export function useUserSettings() {
   );
 
   const update = async (partial: Partial<UserSettings>) => {
-    try {
-      const updated = await updateSettings(partial, USER_ID);
-      await mutate(updated, false);
-      return updated;
-    } catch (e) {
-      throw e;
-    }
+    const updated = await updateSettings(partial, USER_ID);
+    await mutate(updated, false);
+    return updated;
   };
 
   return {
@@ -49,23 +45,15 @@ export function useProjectInfo() {
   );
 
   const create = async (projectData: Omit<ProjectInfo, 'id' | 'is_active' | 'created_at' | 'updated_at'>) => {
-    try {
-      const created = await createProjectInfo(projectData, USER_ID);
-      await mutate(created, false);
-      return created;
-    } catch (e) {
-      throw e;
-    }
+    const created = await createProjectInfo(projectData, USER_ID);
+    await mutate(created, false);
+    return created;
   };
 
   const update = async (id: number, partial: Partial<ProjectInfo>) => {
-    try {
-      const updated = await updateProjectInfo(id, partial);
-      await mutate(updated, false);
-      return updated;
-    } catch (e) {
-      throw e;
-    }
+    const updated = await updateProjectInfo(id, partial);
+    await mutate(updated, false);
+    return updated;
   };
 
   return {
@@ -87,22 +75,14 @@ export function useQuickTemplates() {
   );
 
   const create = async (templateData: Omit<QuickTemplate, 'id' | 'created_at' | 'user_id'>) => {
-    try {
-      const created = await createQuickTemplate(templateData, USER_ID);
-      await mutate([...(data || []), created], false);
-      return created;
-    } catch (e) {
-      throw e;
-    }
+    const created = await createQuickTemplate(templateData, USER_ID);
+    await mutate([...(data || []), created], false);
+    return created;
   };
 
   const remove = async (id: number) => {
-    try {
-      await deleteQuickTemplate(id);
-      await mutate((data || []).filter(t => t.id !== id), false);
-    } catch (e) {
-      throw e;
-    }
+    await deleteQuickTemplate(id);
+    await mutate((data || []).filter(t => t.id !== id), false);
   };
 
   return {

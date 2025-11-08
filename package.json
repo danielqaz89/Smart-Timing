@@ -7,7 +7,12 @@
     "node": ">=22.16.0"
   },
   "scripts": {
-    "start": "node server.js"
+    "start": "node server.js",
+    "lint": "eslint . --ext .js,.mjs",
+    "lint:fix": "eslint . --ext .js,.mjs --fix"
+  },
+  "devDependencies": {
+    "eslint": "^9.39.0"
   },
   "dependencies": {
     "@sparticuz/chromium": "^119.0.0",

@@ -16,6 +16,7 @@ import AddIcon from "@mui/icons-material/Add";
 import WorkIcon from "@mui/icons-material/Work";
 import MeetingRoomIcon from "@mui/icons-material/MeetingRoom";
 import UploadFileIcon from "@mui/icons-material/UploadFile";
+import { useTranslations } from "../contexts/TranslationsContext";
 
 type MobileBottomNavProps = {
   onNavigate: (section: "home" | "logs" | "stats" | "settings") => void;
@@ -28,6 +29,7 @@ export default function MobileBottomNav({
   onQuickAction,
   currentSection = "home",
 }: MobileBottomNavProps) {
+  const { t } = useTranslations();
   const [value, setValue] = useState(currentSection);
 
   const handleChange = (event: React.SyntheticEvent, newValue: string) => {
@@ -36,10 +38,10 @@ export default function MobileBottomNav({
   };
 
   const actions = [
-    { icon: <WorkIcon />, name: "Stemple arbeid", action: "stamp-work" as const },
-    { icon: <MeetingRoomIcon />, name: "Stemple møte", action: "stamp-meeting" as const },
-    { icon: <AddIcon />, name: "Manuell registrering", action: "manual-entry" as const },
-    { icon: <UploadFileIcon />, name: "Importer CSV", action: "import" as const },
+    { icon: <WorkIcon />, name: t('mobile.quick.stamp_work', 'Stemple arbeid'), action: "stamp-work" as const },
+    { icon: <MeetingRoomIcon />, name: t('mobile.quick.stamp_meeting', 'Stemple møte'), action: "stamp-meeting" as const },
+    { icon: <AddIcon />, name: t('mobile.quick.manual_entry', 'Manuell registrering'), action: "manual-entry" as const },
+    { icon: <UploadFileIcon />, name: t('mobile.quick.import_csv', 'Importer CSV'), action: "import" as const },
   ];
 
   return (
@@ -58,35 +60,35 @@ export default function MobileBottomNav({
       >
         <BottomNavigation value={value} onChange={handleChange}>
           <BottomNavigationAction
-            label="Hjem"
+            label={t('nav.home', 'Hjem')}
             value="home"
             icon={<HomeIcon />}
-            aria-label="Gå til hjemside"
+            aria-label={t('aria.go_home', 'Gå til hjemside')}
           />
           <BottomNavigationAction
-            label="Logger"
+            label={t('nav.logs', 'Logger')}
             value="logs"
             icon={<AccessTimeIcon />}
-            aria-label="Se alle logger"
+            aria-label={t('aria.view_logs', 'Se alle logger')}
           />
           <BottomNavigationAction
-            label="Statistikk"
+            label={t('nav.stats', 'Statistikk')}
             value="stats"
             icon={<BarChartIcon />}
-            aria-label="Se statistikk"
+            aria-label={t('aria.view_stats', 'Se statistikk')}
           />
           <BottomNavigationAction
-            label="Innstillinger"
+            label={t('nav.settings', 'Innstillinger')}
             value="settings"
             icon={<SettingsIcon />}
-            aria-label="Åpne innstillinger"
+            aria-label={t('aria.open_settings', 'Åpne innstillinger')}
           />
         </BottomNavigation>
       </Paper>
 
       {/* Speed Dial for Quick Actions */}
       <SpeedDial
-        ariaLabel="Hurtighandlinger"
+        ariaLabel={t('aria.quick_actions', 'Hurtighandlinger')}
         sx={{
           position: "fixed",
           bottom: 80,

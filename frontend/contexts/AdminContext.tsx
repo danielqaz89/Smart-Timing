@@ -51,11 +51,14 @@ export function AdminProvider({ children }: { children: React.ReactNode }) {
   };
 
   const fetchWithAuth = async (url: string, options: RequestInit = {}) => {
-    const headers = {
+    const isFormData = typeof window !== 'undefined' && (options.body instanceof FormData);
+    const headers: any = {
       ...options.headers,
-      'Content-Type': 'application/json',
       Authorization: `Bearer ${token}`,
     };
+    if (!isFormData) {
+      headers['Content-Type'] = headers['Content-Type'] || 'application/json';
+    }
 
     const response = await fetch(url, { ...options, headers });
 

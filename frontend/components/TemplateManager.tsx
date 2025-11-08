@@ -27,6 +27,7 @@ import DeleteIcon from "@mui/icons-material/Delete";
 import EditIcon from "@mui/icons-material/Edit";
 import AddIcon from "@mui/icons-material/Add";
 import DragIndicatorIcon from "@mui/icons-material/DragIndicator";
+import { useTranslations } from "../contexts/TranslationsContext";
 
 interface Template {
   id: number;
@@ -52,6 +53,7 @@ export default function TemplateManager({
   onDelete,
   onToast,
 }: TemplateManagerProps) {
+  const { t } = useTranslations();
   const [open, setOpen] = useState(false);
   const [editMode, setEditMode] = useState(false);
   const [currentTemplate, setCurrentTemplate] = useState<Partial<Template>>({
@@ -92,7 +94,7 @@ export default function TemplateManager({
 
   const handleSave = async () => {
     if (!currentTemplate.label || !currentTemplate.activity) {
-      onToast("Navn og aktivitet er påkrevd", "error");
+      onToast(t('common.name_activity_required', 'Navn og aktivitet er påkrevd'), "error");
       return;
     }
 
@@ -106,20 +108,20 @@ export default function TemplateManager({
         is_favorite: false,
         display_order: templates.length,
       });
-      onToast("Mal lagret", "success");
+      onToast(t('templates.saved', 'Mal lagret'), "success");
       handleClose();
     } catch (e: any) {
-      onToast(`Feil: ${e?.message || e}`, "error");
+      onToast(`${t('common.error', 'Feil')}: ${e?.message || e}`, "error");
     }
   };
 
   const handleDelete = async (id: number, label: string) => {
-    if (!confirm(`Sikker på at du vil slette "${label}"?`)) return;
+    if (!confirm(`${t('confirm.delete_template', 'Sikker på at du vil slette')} "${label}"?`)) return;
     try {
       await onDelete(id);
-      onToast("Mal slettet", "success");
+      onToast(t('templates.deleted', 'Mal slettet'), "success");
     } catch (e: any) {
-      onToast(`Feil: ${e?.message || e}`, "error");
+      onToast(`${t('common.error', 'Feil')}: ${e?.message || e}`, "error");
     }
   };
 
@@ -127,8 +129,8 @@ export default function TemplateManager({
     <>
       <Card>
         <CardHeader
-          title="Maler for hurtigstempling"
-          subheader="Opprett maler for aktiviteter du gjør ofte"
+          title={t('templates.header', 'Maler for hurtigstempling')}
+          subheader={t('templates.subheader', 'Opprett maler for aktiviteter du gjør ofte')}
           action={
             <Button
               variant="contained"
@@ -136,7 +138,7 @@ export default function TemplateManager({
               onClick={() => handleOpen()}
               size="small"
             >
-              Ny mal
+              {t('templates.new', 'Ny mal')}
             </Button>
           }
         />
@@ -144,7 +146,7 @@ export default function TemplateManager({
           {templates.length === 0 ? (
             <Box sx={{ textAlign: "center", py: 4 }}>
               <Typography variant="body2" color="text.secondary">
-                Ingen maler enda. Klikk "Ny mal" for å opprette din første mal.
+                {t('templates.none', 'Ingen maler enda. Klikk "Ny mal" for å opprette din første mal.')}
               </Typography>
             </Box>
           ) : (
@@ -162,7 +164,7 @@ export default function TemplateManager({
                     <Stack direction="row" spacing={0.5}>
                       <IconButton
                         edge="end"
-                        aria-label="delete"
+                        aria-label={t('aria.delete_template', 'Slett mal')}
                         onClick={() => handleDelete(template.id, template.label)}
                         size="small"
                       >
@@ -179,7 +181,7 @@ export default function TemplateManager({
                           {template.label}
                         </Typography>
                         <Chip
-                          label={template.activity === "Work" ? "Arbeid" : "Møte"}
+                          label={template.activity === "Work" ? t('stats.work', 'Arbeid') : t('stats.meetings', 'Møte')}
                           size="small"
                           color={template.activity === "Work" ? "primary" : "secondary"}
                         />
@@ -188,13 +190,13 @@ export default function TemplateManager({
                     secondary={
                       <Stack direction="row" spacing={1} sx={{ mt: 0.5 }} flexWrap="wrap">
                         {template.title && (
-                          <Chip label={`Tittel: ${template.title}`} size="small" variant="outlined" />
+                          <Chip label={`${t('table.title', 'Tittel')}: ${template.title}`} size="small" variant="outlined" />
                         )}
                         {template.project && (
-                          <Chip label={`Prosjekt: ${template.project}`} size="small" variant="outlined" />
+                          <Chip label={`${t('table.project', 'Prosjekt')}: ${template.project}`} size="small" variant="outlined" />
                         )}
                         {template.place && (
-                          <Chip label={`Sted: ${template.place}`} size="small" variant="outlined" />
+                          <Chip label={`${t('table.place', 'Sted')}: ${template.place}`} size="small" variant="outlined" />
                         )}
                       </Stack>
                     }
@@ -208,24 +210,24 @@ export default function TemplateManager({
 
       {/* Create/Edit Dialog */}
       <Dialog open={open} onClose={handleClose} fullWidth maxWidth="sm">
-        <DialogTitle>{editMode ? "Rediger mal" : "Ny mal"}</DialogTitle>
+        <DialogTitle>{editMode ? t('templates.edit_title', 'Rediger mal') : t('templates.new_title', 'Ny mal')}</DialogTitle>
         <DialogContent>
           <Stack spacing={2} sx={{ mt: 1 }}>
             <TextField
-              label="Navn på mal *"
+              label={`${t('templates.name_label', 'Navn på mal')} *`}
               value={currentTemplate.label || ""}
               onChange={(e) =>
                 setCurrentTemplate({ ...currentTemplate, label: e.target.value })
               }
               fullWidth
-              placeholder="F.eks. 'Arbeid på kontoret'"
-              helperText="Dette vises i listen over maler"
+              placeholder={t('templates.name_placeholder', "F.eks. 'Arbeid på kontoret'")}
+              helperText={t('templates.name_helper', 'Dette vises i listen over maler')}
             />
 
             <FormControl fullWidth>
-              <InputLabel>Aktivitet *</InputLabel>
+              <InputLabel>{`${t('fields.activity', 'Aktivitet')} *`}</InputLabel>
               <Select
-                label="Aktivitet *"
+                label={`${t('fields.activity', 'Aktivitet')} *`}
                 value={currentTemplate.activity || "Work"}
                 onChange={(e) =>
                   setCurrentTemplate({
@@ -234,50 +236,50 @@ export default function TemplateManager({
                   })
                 }
               >
-                <MenuItem value="Work">Arbeid</MenuItem>
-                <MenuItem value="Meeting">Møte</MenuItem>
+                <MenuItem value="Work">{t('stats.work', 'Arbeid')}</MenuItem>
+                <MenuItem value="Meeting">{t('stats.meetings', 'Møte')}</MenuItem>
               </Select>
             </FormControl>
 
             <TextField
-              label="Tittel / Møte"
+              label={t('fields.title_meeting', 'Tittel / Møte')}
               value={currentTemplate.title || ""}
               onChange={(e) =>
                 setCurrentTemplate({ ...currentTemplate, title: e.target.value })
               }
               fullWidth
-              placeholder="F.eks. 'Prosjektmøte'"
+              placeholder={t('helpers.eg_title_meeting', "F.eks. 'Prosjektmøte'")}
             />
 
             <TextField
-              label="Prosjekt / Kunde"
+              label={t('fields.project_client', 'Prosjekt / Kunde')}
               value={currentTemplate.project || ""}
               onChange={(e) =>
                 setCurrentTemplate({ ...currentTemplate, project: e.target.value })
               }
               fullWidth
-              placeholder="F.eks. 'Kunde A'"
+              placeholder={t('helpers.eg_project_client', "F.eks. 'Kunde A'")}
             />
 
             <TextField
-              label="Sted / Modus"
+              label={t('fields.place_mode', 'Sted / Modus')}
               value={currentTemplate.place || ""}
               onChange={(e) =>
                 setCurrentTemplate({ ...currentTemplate, place: e.target.value })
               }
               fullWidth
-              placeholder="F.eks. 'Kontor', 'Hjemmekontor', 'Felt'"
+              placeholder={t('helpers.eg_place_mode', "F.eks. 'Kontor', 'Hjemmekontor', 'Felt'")}
             />
 
             <Typography variant="caption" color="text.secondary">
-              * Påkrevd felt
+              {t('common.required_fields', '* Påkrevd felt')}
             </Typography>
           </Stack>
         </DialogContent>
         <DialogActions>
-          <Button onClick={handleClose}>Avbryt</Button>
+          <Button onClick={handleClose}>{t('common.cancel', 'Avbryt')}</Button>
           <Button onClick={handleSave} variant="contained">
-            Lagre
+            {t('common.save', 'Lagre')}
           </Button>
         </DialogActions>
       </Dialog>

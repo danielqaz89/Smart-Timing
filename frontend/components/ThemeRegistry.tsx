@@ -1,6 +1,7 @@
 "use client";
 import { ReactNode, useState, useEffect, createContext, useContext } from "react";
 import { CssBaseline, ThemeProvider, createTheme, PaletteMode } from "@mui/material";
+import { SnackbarProvider } from 'notistack';
 import { updateSettings, fetchSettings } from "../lib/api";
 
 const ThemeModeContext = createContext({
@@ -47,7 +48,9 @@ export default function ThemeRegistry({ children }: { children: ReactNode }) {
     <ThemeModeContext.Provider value={{ mode, toggleMode }}>
       <ThemeProvider theme={theme}>
         <CssBaseline />
-        {children}
+        <SnackbarProvider maxSnack={3} autoHideDuration={2500} anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}>
+          {children}
+        </SnackbarProvider>
       </ThemeProvider>
     </ThemeModeContext.Provider>
   );

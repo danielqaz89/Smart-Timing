@@ -6,10 +6,12 @@ import { Check, Close, PersonAdd } from '@mui/icons-material';
 import { TableVirtuoso } from 'react-virtuoso';
 import { CompanyProvider, useCompany } from '../../../contexts/CompanyContext';
 import PortalLayout from '../../../components/PortalLayout';
+import { useTranslations } from '../../../contexts/TranslationsContext';
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE || 'http://localhost:4000';
 
 function UsersContent() {
+  const { t } = useTranslations();
   const { fetchWithAuth } = useCompany();
   const [users, setUsers] = useState<any[]>([]);
   const [selectedUser, setSelectedUser] = useState<any>(null);
@@ -58,7 +60,7 @@ function UsersContent() {
 
   return (
     <Box>
-      <Typography variant="h4" gutterBottom>Brukere</Typography>
+      <Typography variant="h4" gutterBottom>{t('portal.users.title', 'Brukere')}</Typography>
       <Paper elevation={3} sx={{ height: 600 }}>
         <TableVirtuoso
           data={users}
@@ -70,11 +72,11 @@ function UsersContent() {
           }}
           fixedHeaderContent={() => (
             <TableRow>
-              <TableCell sx={{ bgcolor: 'background.paper', fontWeight: 'bold' }}>E-post</TableCell>
-              <TableCell sx={{ bgcolor: 'background.paper', fontWeight: 'bold' }}>Rolle</TableCell>
-              <TableCell sx={{ bgcolor: 'background.paper', fontWeight: 'bold' }}>Status</TableCell>
-              <TableCell sx={{ bgcolor: 'background.paper', fontWeight: 'bold' }}>Saker</TableCell>
-              <TableCell align="right" sx={{ bgcolor: 'background.paper', fontWeight: 'bold' }}>Handlinger</TableCell>
+              <TableCell sx={{ bgcolor: 'background.paper', fontWeight: 'bold' }}>{t('table.email', 'E-post')}</TableCell>
+              <TableCell sx={{ bgcolor: 'background.paper', fontWeight: 'bold' }}>{t('table.role', 'Rolle')}</TableCell>
+              <TableCell sx={{ bgcolor: 'background.paper', fontWeight: 'bold' }}>{t('table.status', 'Status')}</TableCell>
+              <TableCell sx={{ bgcolor: 'background.paper', fontWeight: 'bold' }}>{t('table.cases', 'Saker')}</TableCell>
+              <TableCell align="right" sx={{ bgcolor: 'background.paper', fontWeight: 'bold' }}>{t('table.actions', 'Handlinger')}</TableCell>
             </TableRow>
           )}
           itemContent={(index, user) => (
@@ -83,7 +85,7 @@ function UsersContent() {
               <TableCell><Chip label={user.role} size="small" /></TableCell>
               <TableCell>
                 <Chip 
-                  label={user.approved ? 'Godkjent' : 'Venter'} 
+                  label={user.approved ? t('common.approved', 'Godkjent') : t('common.pending', 'Venter')} 
                   color={user.approved ? 'success' : 'warning'}
                   size="small"
                 />
@@ -99,19 +101,19 @@ function UsersContent() {
       </Paper>
 
       <Dialog open={!!selectedUser} onClose={() => setSelectedUser(null)} maxWidth="sm" fullWidth>
-        <DialogTitle>Tildel sak</DialogTitle>
+        <DialogTitle>{t('portal.users.assign_case', 'Tildel sak')}</DialogTitle>
         <DialogContent>
           <TextField
             fullWidth
-            label="Saksnummer"
+            label={t('fields.case_id', 'Saksnummer')}
             value={newCase}
             onChange={(e) => setNewCase(e.target.value)}
             margin="normal"
           />
         </DialogContent>
         <DialogActions>
-          <Button onClick={() => setSelectedUser(null)}>Avbryt</Button>
-          <Button onClick={handleAddCase} variant="contained">Legg til</Button>
+          <Button onClick={() => setSelectedUser(null)}>{t('common.cancel', 'Avbryt')}</Button>
+          <Button onClick={handleAddCase} variant="contained">{t('common.add', 'Legg til')}</Button>
         </DialogActions>
       </Dialog>
     </Box>

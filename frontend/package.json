@@ -5,7 +5,9 @@
   "scripts": {
     "dev": "next dev -p 3000",
     "build": "next build",
-    "start": "next start -p 3000"
+    "start": "next start -p 3000",
+    "lint": "eslint . --ext .js,.jsx,.ts,.tsx",
+    "lint:fix": "eslint . --ext .js,.jsx,.ts,.tsx --fix"
   },
   "dependencies": {
     "@emotion/react": "^11.11.4",
@@ -14,6 +16,7 @@
     "@mui/material": "^5.15.20",
     "@tanstack/react-virtual": "^3.0.0-beta.65",
     "dayjs": "^1.11.11",
+    "html2canvas": "^1.4.1",
     "jspdf": "^3.0.3",
     "jspdf-autotable": "^5.0.2",
     "next": "14.2.5",
@@ -25,9 +28,15 @@
     "swr": "^2.2.5"
   },
   "devDependencies": {
+    "@next/eslint-plugin-next": "^16.0.1",
     "@types/node": "24.10.0",
     "eslint": "^9.39.0",
+    "eslint-plugin-next": "^0.0.0",
+    "eslint-plugin-react": "^7.37.2",
+    "eslint-plugin-react-hooks": "^7.0.1",
+    "globals": "^16.5.0",
     "prettier": "^3.6.2",
-    "typescript": "5.9.3"
+    "typescript": "5.9.3",
+    "typescript-eslint": "^8.12.2"
   }
 }

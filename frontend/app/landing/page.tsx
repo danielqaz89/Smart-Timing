@@ -2,11 +2,13 @@
 import { useEffect, useState } from 'react';
 import { fetchCmsPage, submitContactForm, API_BASE } from '../../lib/api';
 import { Box, Button, Container, Grid, Link as MuiLink, Stack, TextField, Typography, Checkbox, FormControlLabel, Alert } from '@mui/material';
+import { useTranslations } from '../../contexts/TranslationsContext';
 
 export default function LandingPage() {
   const [page, setPage] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const { t } = useTranslations();
 
   useEffect(() => {
     (async () => {
@@ -21,8 +23,8 @@ export default function LandingPage() {
     })();
   }, []);
 
-  if (loading) return <Container sx={{ py: 6 }}><Typography>Laster...</Typography></Container>;
-  if (error) return <Container sx={{ py: 6 }}><Typography color="error">{error}</Typography></Container>;
+  if (loading) return <Container sx={{ py: 6 }}><Typography>{t('landing.loading', 'Laster...')}</Typography></Container>;
+  if (error) return <Container sx={{ py: 6 }}><Typography color="error">{error || t('landing.error', 'Kunne ikke laste siden')}</Typography></Container>;
 
   const sections: any[] = Array.isArray(page?.sections) ? page.sections : [];
 
@@ -127,11 +129,11 @@ function renderSection(s: any) {
     case 'contact':
       return (
         <Stack spacing={1}>
-          <Typography variant="h4" fontWeight={700}>{c.title || 'Kontakt oss'}</Typography>
+          <Typography variant="h4" fontWeight={700}>{c.title || t('landing.contact_us', 'Kontakt oss')}</Typography>
           {c.subtitle && <Typography color="text.secondary">{c.subtitle}</Typography>}
-          {c.email && <Typography>E-post: <MuiLink href={`mailto:${c.email}`}>{c.email}</MuiLink></Typography>}
-          {c.phone && <Typography>Telefon: {c.phone}</Typography>}
-          {c.address && <Typography>Adresse: {c.address}</Typography>}
+          {c.email && <Typography>{t('landing.email', 'E-post')}: <MuiLink href={`mailto:${c.email}`}>{c.email}</MuiLink></Typography>}
+          {c.phone && <Typography>{t('landing.phone', 'Telefon')}: {c.phone}</Typography>}
+          {c.address && <Typography>{t('landing.address', 'Adresse')}: {c.address}</Typography>}
         </Stack>
       );
     case 'form':
@@ -167,15 +169,15 @@ function ContactForm({ section }: { section: any }) {
     try {
       await submitContactForm({ page_id: 'landing', form_id: section.id, values });
       setDone(true);
-    } catch (e: any) {
-      setError(e?.message || 'Kunne ikke sende');
+      } catch (e: any) {
+        setError(e?.message || t('landing.form_failed', 'Kunne ikke sende'));
     } finally {
       setBusy(false);
     }
   }
 
   if (done) {
-    return <Alert severity="success">{c.success_message || 'Takk! Vi har mottatt meldingen din.'}</Alert>;
+    return <Alert severity="success">{c.success_message || t('landing.form_success', 'Takk! Vi har mottatt meldingen din.')}</Alert>;
   }
 
   return (
@@ -208,8 +210,8 @@ function ContactForm({ section }: { section: any }) {
           );
         })}
         <Stack direction="row" spacing={2}>
-          <Button type="submit" variant="contained" disabled={busy}>{c.submit_text || 'Send'}</Button>
-          {c.privacy_link && <MuiLink href={c.privacy_link} underline="hover">Personvern</MuiLink>}
+          <Button type="submit" variant="contained" disabled={busy}>{c.submit_text || t('common.send', 'Send')}</Button>
+          {c.privacy_link && <MuiLink href={c.privacy_link} underline="hover">{t('landing.privacy', 'Personvern')}</MuiLink>}
         </Stack>
         {error && <Typography color="error">{error}</Typography>}
       </Stack>
