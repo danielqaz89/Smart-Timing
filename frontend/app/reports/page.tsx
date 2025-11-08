@@ -7,10 +7,12 @@ import { fetchLogs, type LogRow } from "../../lib/api";
 import useSWR from "swr";
 import dayjs from "dayjs";
 import Link from "next/link";
+import { useTranslations } from "../../contexts/TranslationsContext";
 
 const COLORS = ['#0088FE', '#00C49F', '#FFBB28', '#FF8042', '#8884d8', '#82ca9d'];
 
 export default function ReportsPage() {
+  const { t } = useTranslations();
   const { settings } = useUserSettings();
   const monthNav = settings?.month_nav || dayjs().format("YYYYMM");
   
@@ -27,7 +29,7 @@ export default function ReportsPage() {
       const dow = d.day();
       if (dow === 0 || dow === 6) return acc;
       
-      const project = log.project || "Uspesifisert";
+      const project = log.project || t('common.unspecified', 'Uspesifisert');
       const start = dayjs(`${log.date} ${log.start_time}`);
       const end = dayjs(`${log.date} ${log.end_time}`);
       const hours = end.diff(start, "minute") / 60 - Number(log.break_hours || 0);
@@ -48,7 +50,7 @@ export default function ReportsPage() {
       const dow = d.day();
       if (dow === 0 || dow === 6) return acc;
       
-      const activity = log.activity === "Work" ? "Arbeid" : "Møte";
+      const activity = log.activity === "Work" ? t('stats.work', 'Arbeid') : t('stats.meetings', 'Møte');
       const start = dayjs(`${log.date} ${log.start_time}`);
       const end = dayjs(`${log.date} ${log.end_time}`);
       const hours = end.diff(start, "minute") / 60 - Number(log.break_hours || 0);
@@ -103,9 +105,9 @@ export default function ReportsPage() {
   return (
     <Container maxWidth="lg" sx={{ py: 3 }}>
       <Box sx={{ mb: 3, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-        <Typography variant="h4">Rapporter</Typography>
+        <Typography variant="h4">{t('nav.reports', 'Rapporter')}</Typography>
         <Link href="/" passHref legacyBehavior>
-          <Button variant="outlined">Tilbake</Button>
+          <Button variant="outlined">{t('common.back', 'Tilbake')}</Button>
         </Link>
       </Box>
 
@@ -116,19 +118,19 @@ export default function ReportsPage() {
             <CardContent>
               <Grid container spacing={2}>
                 <Grid item xs={6} md={3}>
-                  <Typography variant="caption" color="text.secondary">Total timer</Typography>
+                  <Typography variant="caption" color="text.secondary">{t('stats.total_hours', 'Total timer')}</Typography>
                   <Typography variant="h4">{totalHours.toFixed(1)}</Typography>
                 </Grid>
                 <Grid item xs={6} md={3}>
-                  <Typography variant="caption" color="text.secondary">Arbeidsdager</Typography>
+                  <Typography variant="caption" color="text.secondary">{t('stats.work_days', 'Arbeidsdager')}</Typography>
                   <Typography variant="h4">{logs.filter(l => l.activity === "Work").length}</Typography>
                 </Grid>
                 <Grid item xs={6} md={3}>
-                  <Typography variant="caption" color="text.secondary">Møter</Typography>
+                  <Typography variant="caption" color="text.secondary">{t('stats.meetings_total', 'Møter')}</Typography>
                   <Typography variant="h4">{logs.filter(l => l.activity === "Meeting").length}</Typography>
                 </Grid>
                 <Grid item xs={6} md={3}>
-                  <Typography variant="caption" color="text.secondary">Prosjekter</Typography>
+                  <Typography variant="caption" color="text.secondary">{t('stats.projects', 'Prosjekter')}</Typography>
                   <Typography variant="h4">{new Set(logs.map(l => l.project).filter(Boolean)).size}</Typography>
                 </Grid>
               </Grid>
@@ -139,7 +141,7 @@ export default function ReportsPage() {
         {/* Daily hours chart */}
         <Grid item xs={12} lg={6}>
           <Card>
-            <CardHeader title="Timer per dag" />
+            <CardHeader title={t('reports.hours_per_day', 'Timer per dag')} />
             <CardContent>
               <ResponsiveContainer width="100%" height={300}>
                 <BarChart data={dailyData}>
@@ -148,7 +150,7 @@ export default function ReportsPage() {
                   <YAxis />
                   <Tooltip />
                   <Legend />
-                  <Bar dataKey="timer" fill="#1976d2" name="Timer" />
+                  <Bar dataKey="timer" fill="#1976d2" name={t('stats.hours', 'Timer')} />
                 </BarChart>
               </ResponsiveContainer>
             </CardContent>
@@ -158,7 +160,7 @@ export default function ReportsPage() {
         {/* Activity breakdown */}
         <Grid item xs={12} lg={6}>
           <Card>
-            <CardHeader title="Aktivitetsfordeling" />
+            <CardHeader title={t('reports.activity_breakdown', 'Aktivitetsfordeling')} />
             <CardContent>
               <ResponsiveContainer width="100%" height={300}>
                 <PieChart>
@@ -167,7 +169,7 @@ export default function ReportsPage() {
                     cx="50%"
                     cy="50%"
                     labelLine={false}
-                    label={({ name, value }) => `${name}: ${value}t`}
+                    label={({ name, value }) => `${name}: ${value}${t('stats.hours_abbr', 't')}`}
                     outerRadius={100}
                     fill="#8884d8"
                     dataKey="value"
@@ -186,7 +188,7 @@ export default function ReportsPage() {
         {/* Hours by project */}
         <Grid item xs={12}>
           <Card>
-            <CardHeader title="Timer per prosjekt" />
+            <CardHeader title={t('reports.hours_per_project', 'Timer per prosjekt')} />
             <CardContent>
               <ResponsiveContainer width="100%" height={400}>
                 <BarChart data={projectData} layout="vertical">
@@ -195,7 +197,7 @@ export default function ReportsPage() {
                   <YAxis dataKey="name" type="category" width={150} />
                   <Tooltip />
                   <Legend />
-                  <Bar dataKey="value" fill="#00C49F" name="Timer" />
+                  <Bar dataKey="value" fill="#00C49F" name={t('stats.hours', 'Timer')} />
                 </BarChart>
               </ResponsiveContainer>
             </CardContent>

@@ -28,6 +28,8 @@ import PrivacyTipIcon from "@mui/icons-material/PrivacyTip";
 import Link from "next/link";
 import { useUserSettings } from "../lib/hooks";
 import { useSnackbar } from "notistack";
+import { useLanguage } from "../contexts/LanguageContext";
+import { useTranslations } from "../contexts/TranslationsContext";
 import GoogleSheetsPicker from "./GoogleSheetsPicker";
 
 // Locale-safe helpers for Timesats input (Norwegian)
@@ -52,6 +54,8 @@ export default function SettingsDrawer() {
   const [open, setOpen] = useState(false);
   const { settings, updateSettings: updateSettingsDb, isLoading } = useUserSettings();
   const { enqueueSnackbar } = useSnackbar();
+  const { language, setLanguage } = useLanguage();
+  const { t } = useTranslations();
   
   // Form state
   const [paidBreak, setPaidBreak] = useState(false);
@@ -103,10 +107,10 @@ export default function SettingsDrawer() {
         sheet_url: sheetUrl,
         invoice_reminder_active: invoiceReminderActive,
       });
-      enqueueSnackbar("Alle innstillinger lagret", { variant: "success" });
+      enqueueSnackbar(t('settings.saved_all', 'Alle innstillinger lagret'), { variant: "success" });
       setOpen(false);
     } catch (e: any) {
-      enqueueSnackbar(`Feil ved lagring: ${e?.message || e}`, { variant: "error" });
+      enqueueSnackbar(`${t('common.save_failed', 'Feil ved lagring')}: ${e?.message || e}`, { variant: "error" });
     } finally {
       setSaving(false);
     }
@@ -114,12 +118,12 @@ export default function SettingsDrawer() {
 
   return (
     <>
-      <IconButton aria-label="Innstillinger" onClick={() => setOpen(true)} size="small">
+      <IconButton aria-label={t('settings.title', 'Innstillinger')} onClick={() => setOpen(true)} size="small">
         <SettingsIcon />
       </IconButton>
       <Drawer anchor="right" open={open} onClose={() => setOpen(false)}>
         <Box sx={{ width: 400, p: 2, maxHeight: '100vh', overflow: 'auto' }} role="presentation">
-          <Typography variant="h5" gutterBottom>Innstillinger</Typography>
+          <Typography variant="h5" gutterBottom>{t('settings.title', 'Innstillinger')}</Typography>
           <Divider sx={{ mb: 2 }} />
           
           {isLoading ? (
@@ -128,15 +132,34 @@ export default function SettingsDrawer() {
             </Box>
           ) : (
             <Stack spacing={2}>
-              {/* Lønn og Skatt */}
+              {/* Språk */}
               <Accordion defaultExpanded>
                 <AccordionSummary expandIcon={<ExpandMoreIcon />}>
-                  <Typography variant="h6">💰 Lønn og Skatt</Typography>
+                  <Typography variant="h6">{t('settings.section.language', '🌐 Språk')}</Typography>
+                </AccordionSummary>
+                <AccordionDetails>
+                  <FormControl fullWidth>
+                    <InputLabel>{t('settings.language', 'Språk')}</InputLabel>
+                    <Select label={t('settings.language', 'Språk')} value={language} onChange={(e) => setLanguage(e.target.value as any)}>
+                      <MenuItem value="no">Norsk</MenuItem>
+                      <MenuItem value="en">English</MenuItem>
+                    </Select>
+                  </FormControl>
+                  <Typography variant="caption" color="text.secondary">
+                    Gjelder hele appen. Du kan angre via toast etter endring.
+                  </Typography>
+                </AccordionDetails>
+              </Accordion>
+
+              {/* Lønn og Skatt */}
+              <Accordion>
+                <AccordionSummary expandIcon={<ExpandMoreIcon />}>
+                  <Typography variant="h6">{t('settings.section.pay_tax', '💰 Lønn og Skatt')}</Typography>
                 </AccordionSummary>
                 <AccordionDetails>
                   <Stack spacing={2}>
                     <TextField
-                      label="Timesats (kr/t)"
+                      label={t('fields.hourly_rate', 'Timesats (kr/t)')}
                       value={hourlyRateInput}
                       inputMode="decimal"
                       onChange={(e) => {
@@ -150,9 +173,9 @@ export default function SettingsDrawer() {
                       disabled={saving}
                     />
                     <FormControl fullWidth disabled={saving}>
-                      <InputLabel>Skatteprosent</InputLabel>
+                      <InputLabel>{t('fields.tax_percent', 'Skatteprosent')}</InputLabel>
                       <Select
-                        label="Skatteprosent"
+                        label={t('fields.tax_percent', 'Skatteprosent')}
                         value={String(taxPct)}
                         onChange={(e) => setTaxPct(Number(e.target.value))}
                       >
@@ -171,10 +194,10 @@ export default function SettingsDrawer() {
                           disabled={saving}
                         />
                       }
-                      label="Betalt pause"
+                      label={t('fields.paid_break', 'Betalt pause')}
                     />
                     <Typography variant="caption" color="text.secondary">
-                      Ved betalt pause trekkes ikke pausetid fra lønnsberegningen.
+                      {t('help.paid_break_hint', 'Ved betalt pause trekkes ikke pausetid fra lønnsberegningen.')}
                     </Typography>
                   </Stack>
                 </AccordionDetails>
@@ -183,50 +206,50 @@ export default function SettingsDrawer() {
               {/* E-post og Timeliste */}
               <Accordion>
                 <AccordionSummary expandIcon={<ExpandMoreIcon />}>
-                  <Typography variant="h6">📧 E-post og Timeliste</Typography>
+                  <Typography variant="h6">{t('settings.section.email_timesheet', '📧 E-post og Timeliste')}</Typography>
                 </AccordionSummary>
                 <AccordionDetails>
                   <Stack spacing={2}>
                     <TextField
-                      label="Avsender e-post"
+                      label={t('fields.sender_email', 'Avsender e-post')}
                       value={sender}
                       onChange={(e) => setSender(e.target.value)}
                       fullWidth
                       disabled={saving}
                       type="email"
-                      placeholder="din@epost.no"
+                      placeholder={t('placeholders.sender_email', 'din@epost.no')}
                     />
                     <TextField
-                      label="Mottaker e-post"
+                      label={t('fields.recipient_email', 'Mottaker e-post')}
                       value={recipient}
                       onChange={(e) => setRecipient(e.target.value)}
                       fullWidth
                       disabled={saving}
                       type="email"
-                      placeholder="kunde@bedrift.no"
+                      placeholder={t('placeholders.recipient_email', 'kunde@bedrift.no')}
                     />
                     <FormControl fullWidth disabled={saving}>
-                      <InputLabel>Timeliste format</InputLabel>
+                      <InputLabel>{t('fields.timesheet_format', 'Timeliste format')}</InputLabel>
                       <Select
-                        label="Timeliste format"
+                        label={t('fields.timesheet_format', 'Timeliste format')}
                         value={format}
                         onChange={(e) => setFormat(e.target.value as "xlsx" | "pdf")}
                       >
-                        <MenuItem value="xlsx">Excel (XLSX)</MenuItem>
+                        <MenuItem value="xlsx">{t('fields.format_xlsx', 'Excel (XLSX)')}</MenuItem>
                         <MenuItem value="pdf">PDF</MenuItem>
                       </Select>
                     </FormControl>
                     <TextField
                       type="password"
-                      label="SMTP App-passord"
+                      label={t('fields.smtp_app_password', 'SMTP App-passord')}
                       value={smtpPass}
                       onChange={(e) => setSmtpPass(e.target.value)}
                       fullWidth
                       disabled={saving}
-                      placeholder="(valgfritt)"
+                      placeholder={t('placeholders.optional', '(valgfritt)')}
                     />
                     <Typography variant="caption" color="text.secondary">
-                      For Gmail/Outlook: Bruk app-spesifikt passord. Vi gjetter SMTP-server fra e-post.
+                      {t('help.smtp_hint', 'For Gmail/Outlook: Bruk app-spesifikt passord. Vi gjetter SMTP-server fra e-post.')}
                     </Typography>
                     <Divider sx={{ my: 2 }} />
                     <FormControlLabel
@@ -237,10 +260,10 @@ export default function SettingsDrawer() {
                           disabled={saving}
                         />
                       }
-                      label="Aktiver påminnelse om fakturering"
+                      label={t('settings.invoice_reminder', 'Aktiver påminnelse om fakturering')}
                     />
                     <Typography variant="caption" color="text.secondary">
-                      Motta automatisk påminnelse om å sende faktura ved månedsslutt.
+                      {t('help.invoice_reminder', 'Motta automatisk påminnelse om å sende faktura ved månedsslutt.')}
                     </Typography>
                   </Stack>
                 </AccordionDetails>
@@ -249,7 +272,7 @@ export default function SettingsDrawer() {
               {/* Webhook og Integrasjoner */}
               <Accordion>
                 <AccordionSummary expandIcon={<ExpandMoreIcon />}>
-                  <Typography variant="h6">🔗 Webhook og Integrasjoner</Typography>
+                  <Typography variant="h6">{t('settings.webhooks_integrations', '🔗 Webhook og Integrasjoner')}</Typography>
                 </AccordionSummary>
                 <AccordionDetails>
                   <Stack spacing={2}>
@@ -261,10 +284,10 @@ export default function SettingsDrawer() {
                           disabled={saving}
                         />
                       }
-                      label="Aktiver webhook"
+                      label={t('fields.enable_webhook', 'Aktiver webhook')}
                     />
                     <TextField
-                      label="Webhook URL"
+                      label={t('fields.webhook_url', 'Webhook URL')}
                       value={webhookUrl}
                       onChange={(e) => setWebhookUrl(e.target.value)}
                       fullWidth
@@ -274,19 +297,19 @@ export default function SettingsDrawer() {
                     />
                     <Stack direction="row" spacing={1} alignItems="flex-start">
                       <TextField
-                        label="Google Sheets URL"
+                        label={t('fields.google_sheets_url', 'Google Sheets URL')}
                         value={sheetUrl}
                         onChange={(e) => setSheetUrl(e.target.value)}
                         fullWidth
                         disabled={saving}
                         placeholder="https://docs.google.com/spreadsheets/..."
                         type="url"
-                        helperText="Eller bruk 'Browse' for å velge fra Google Drive"
+                        helperText={t('help.sheets_picker', "Eller bruk 'Browse' for å velge fra Google Drive")}
                       />
                       <GoogleSheetsPicker
                         onSheetSelected={(url, name) => {
                           setSheetUrl(url);
-                          enqueueSnackbar(`Valgt: ${name}`, { variant: "success" });
+                          enqueueSnackbar(`${t('common.selected', 'Valgt')}: ${name}`, { variant: "success" });
                         }}
                         onError={(error) => {
                           enqueueSnackbar(error, { variant: "error" });
@@ -294,7 +317,7 @@ export default function SettingsDrawer() {
                       />
                     </Stack>
                     <Typography variant="caption" color="text.secondary">
-                      Webhook sender data til eksterne systemer. Sheets-URL for toveis synk.
+                      {t('help.webhook_sheets', 'Webhook sender data til eksterne systemer. Sheets-URL for toveis synk.')}
                     </Typography>
                   </Stack>
                 </AccordionDetails>
@@ -303,7 +326,7 @@ export default function SettingsDrawer() {
               {/* Admin & System */}
               <Accordion>
                 <AccordionSummary expandIcon={<ExpandMoreIcon />}>
-                  <Typography variant="h6">🔐 Admin og System</Typography>
+                  <Typography variant="h6">{t('settings.admin_system', '🔐 Admin og System')}</Typography>
                 </AccordionSummary>
                 <AccordionDetails>
                   <Stack spacing={2}>
@@ -313,11 +336,11 @@ export default function SettingsDrawer() {
                         startIcon={<AdminPanelSettingsIcon />}
                         fullWidth
                       >
-                        Admin Panel
+                        {t('settings.admin_panel', 'Admin Panel')}
                       </Button>
                     </Link>
                     <Typography variant="caption" color="text.secondary">
-                      Tilgang til systemadministrasjon, brukeradministrasjon og analytics.
+                      {t('help.admin_panel', 'Tilgang til systemadministrasjon, brukeradministrasjon og analytics.')}
                     </Typography>
                     
                     <Divider sx={{ my: 1 }} />
@@ -329,11 +352,11 @@ export default function SettingsDrawer() {
                         fullWidth
                         color="inherit"
                       >
-                        GDPR og Personvern
+                        {t('settings.gdpr_privacy', 'GDPR og Personvern')}
                       </Button>
                     </Link>
                     <Typography variant="caption" color="text.secondary">
-                      Eksporter dine data eller slett kontoen din (GDPR-rettigheter).
+                      {t('help.gdpr', 'Eksporter dine data eller slett kontoen din (GDPR-rettigheter).')}
                     </Typography>
                   </Stack>
                 </AccordionDetails>
@@ -348,7 +371,7 @@ export default function SettingsDrawer() {
                 disabled={saving}
                 fullWidth
               >
-                {saving ? <CircularProgress size={24} /> : "Lagre alle innstillinger"}
+                {saving ? <CircularProgress size={24} /> : t('settings.save_all', 'Lagre alle innstillinger')}
               </Button>
               
               <Button
@@ -357,7 +380,7 @@ export default function SettingsDrawer() {
                 onClick={() => setOpen(false)}
                 disabled={saving}
               >
-                Avbryt
+                {t('common.cancel', 'Avbryt')}
               </Button>
             </Stack>
           )}

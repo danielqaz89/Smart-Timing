@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256" role="img" aria-label="Smart Timing logo">
+  <defs>
+    <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#1976d2"/>
+      <stop offset="100%" stop-color="#42a5f5"/>
+    </linearGradient>
+  </defs>
+  <rect width="256" height="256" rx="28" fill="#0b1220"/>
+  <g transform="translate(28,28)">
+    <rect width="200" height="200" rx="20" fill="url(#g)" opacity="0.1"/>
+    <path d="M24 84c0-28 22-52 60-52h56c6 0 12 4 12 10s-6 10-12 10h-56c-24 0-36 12-36 32 0 18 14 30 36 30h24c6 0 12 4 12 10s-6 10-12 10h-24c-40 0-60-22-60-50z" fill="url(#g)"/>
+    <path d="M112 60c0-6 5-10 11-10h37c6 0 10 4 10 10v92c0 6-4 10-10 10h-37c-6 0-11-4-11-10s5-10 11-10h27V70h-27c-6 0-11-4-11-10z" fill="#e3f2fd"/>
+  </g>
+</svg>

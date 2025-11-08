@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256" role="img" aria-label="Company icon">
+  <rect width="256" height="256" rx="24" fill="#0b1220"/>
+  <g fill="#90caf9" transform="translate(32,32)">
+    <rect x="24" y="48" width="144" height="128" rx="8" fill="#0d47a1"/>
+    <rect x="48" y="64" width="16" height="16" rx="2"/>
+    <rect x="80" y="64" width="16" height="16" rx="2"/>
+    <rect x="112" y="64" width="16" height="16" rx="2"/>
+    <rect x="48" y="96" width="16" height="16" rx="2"/>
+    <rect x="80" y="96" width="16" height="16" rx="2"/>
+    <rect x="112" y="96" width="16" height="16" rx="2"/>
+    <rect x="48" y="128" width="16" height="16" rx="2"/>
+    <rect x="80" y="128" width="16" height="16" rx="2"/>
+    <rect x="112" y="128" width="16" height="16" rx="2"/>
+    <rect x="72" y="152" width="40" height="24" rx="2" fill="#e3f2fd"/>
+  </g>
+</svg>

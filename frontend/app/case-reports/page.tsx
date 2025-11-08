@@ -5,11 +5,15 @@ import { Box, Container, Typography, Card, CardContent, Button, Grid, TextField,
 import { Add, Edit, Send } from '@mui/icons-material';
 import { CompanyProvider, useCompany } from '../../contexts/CompanyContext';
 import Link from 'next/link';
+import { useTranslations } from '../../contexts/TranslationsContext';
+import { useSnackbar } from 'notistack';
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE || 'http://localhost:4000';
 
 function CaseReportsContent() {
   const { fetchWithAuth, user } = useCompany();
+  const { t } = useTranslations();
+  const { enqueueSnackbar } = useSnackbar();
   const [cases, setCases] = useState<any[]>([]);
   const [reports, setReports] = useState<any[]>([]);
   const [editingReport, setEditingReport] = useState<any>(null);
@@ -65,6 +69,7 @@ function CaseReportsContent() {
         method,
         body: JSON.stringify(formData),
       });
+      enqueueSnackbar(t('case_reports.saved', 'Rapport lagret'), { variant: 'success' });
       
       setEditingReport(null);
       setFormData({
@@ -81,21 +86,24 @@ function CaseReportsContent() {
         notes: '',
       });
       loadReports();
-    } catch (error) {
+    } catch (error: any) {
       console.error('Failed to save report:', error);
+      enqueueSnackbar(`${t('common.save_failed', 'Feil ved lagring')}: ${error?.message || error}`, { variant: 'error' });
     }
   };
 
   const handleSubmit = async (reportId: number) => {
-    if (!confirm('Send inn rapporten for godkjenning?')) return;
+    if (!confirm(t('case_reports.submit_confirm', 'Send inn rapporten for godkjenning?'))) return;
     try {
       await fetchWithAuth(`${API_BASE}/api/case-reports/${reportId}`, {
         method: 'PUT',
         body: JSON.stringify({ status: 'submitted' }),
       });
+      enqueueSnackbar(t('case_reports.submitted', 'Rapport sendt inn'), { variant: 'success' });
       loadReports();
-    } catch (error) {
+    } catch (error: any) {
       console.error('Failed to submit report:', error);
+      enqueueSnackbar(`${t('case_reports.submit_failed', 'Kunne ikke sende inn')}: ${error?.message || error}`, { variant: 'error' });
     }
   };
 
@@ -114,6 +122,7 @@ function CaseReportsContent() {
       recommendations: report.recommendations || '',
       notes: report.notes || '',
     });
+    enqueueSnackbar(t('case_reports.edit_opened', 'Utkast åpnet for redigering'), { variant: 'info' });
   };
 
   const getStatusColor = (status: string) => {
@@ -129,8 +138,8 @@ function CaseReportsContent() {
     return (
       <Container maxWidth="md" sx={{ py: 4 }}>
         <Alert severity="info">
-          Du må være logget inn i bedriftsportalen for å skrive saksrapporter.
-          <Link href="/portal/login"> Logg inn her</Link>
+          {t('portal.login_required_reports', 'Du må være logget inn i bedriftsportalen for å skrive saksrapporter.')} 
+          <Link href="/portal/login"> {t('portal.login_here', 'Logg inn her')}</Link>
         </Alert>
       </Container>
     );
@@ -139,8 +148,8 @@ function CaseReportsContent() {
   return (
     <Container maxWidth="lg" sx={{ py: 3 }}>
       <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 3 }}>
-        <Typography variant="h4">Mine saksrapporter</Typography>
-        <Button variant="outlined" component={Link} href="/">Tilbake</Button>
+        <Typography variant="h4">{t('case_reports.my_reports', 'Mine saksrapporter')}</Typography>
+        <Button variant="outlined" component={Link} href="/">{t('common.back', 'Tilbake')}</Button>
       </Box>
 
       {/* Existing Reports */}
@@ -154,17 +163,17 @@ function CaseReportsContent() {
                     <Typography variant="h6">{report.case_id}</Typography>
                     <Typography color="text.secondary" variant="body2">{report.month}</Typography>
                   </Box>
-                  <Chip label={report.status} color={getStatusColor(report.status)} size="small" />
+                  <Chip label={t(`case_reports.status.${report.status}`, report.status)} color={getStatusColor(report.status)} size="small" />
                 </Box>
                 
                 <Box sx={{ mt: 2, display: 'flex', gap: 1 }}>
                   {(report.status === 'draft' || report.status === 'rejected') && (
                     <>
                       <Button size="small" startIcon={<Edit />} onClick={() => startEdit(report)}>
-                        Rediger
+                        {t('common.edit', 'Rediger')}
                       </Button>
                       <Button size="small" startIcon={<Send />} onClick={() => handleSubmit(report.id)}>
-                        Send inn
+                        {t('common.submit', 'Send inn')}
                       </Button>
                     </>
                   )}
@@ -172,7 +181,7 @@ function CaseReportsContent() {
                 
                 {report.rejection_reason && (
                   <Alert severity="error" sx={{ mt: 2 }}>
-                    Avslått: {report.rejection_reason}
+                    {t('case_reports.rejected_prefix', 'Avslått:')} {report.rejection_reason}
                   </Alert>
                 )}
               </CardContent>
@@ -185,16 +194,16 @@ function CaseReportsContent() {
       <Card>
         <CardContent>
           <Typography variant="h6" gutterBottom>
-            {editingReport ? 'Rediger rapport' : 'Ny saksrapport'}
+            {editingReport ? t('case_reports.edit_title', 'Rediger rapport') : t('case_reports.new_title', 'Ny saksrapport')}
           </Typography>
           
           <Grid container spacing={2}>
             <Grid item xs={12} md={6}>
               <FormControl fullWidth>
-                <InputLabel>Sak</InputLabel>
+                <InputLabel>{t('case_reports.case', 'Sak')}</InputLabel>
                 <Select
                   value={formData.user_cases_id}
-                  label="Sak"
+                  label={t('case_reports.case', 'Sak')}
                   onChange={(e) => {
                     const selectedCase = cases.find(c => c.id === e.target.value);
                     setFormData({ 
@@ -216,7 +225,7 @@ function CaseReportsContent() {
               <TextField
                 fullWidth
                 type="month"
-                label="Måned"
+                label={t('fields.month', 'Måned')}
                 InputLabelProps={{ shrink: true }}
                 value={formData.month}
                 onChange={(e) => setFormData({ ...formData, month: e.target.value })}
@@ -229,7 +238,7 @@ function CaseReportsContent() {
                 fullWidth
                 multiline
                 rows={3}
-                label="Bakgrunn for tiltaket"
+                label={t('case_reports.background', 'Bakgrunn for tiltaket')}
                 value={formData.background}
                 onChange={(e) => setFormData({ ...formData, background: e.target.value })}
               />
@@ -240,7 +249,7 @@ function CaseReportsContent() {
                 fullWidth
                 multiline
                 rows={3}
-                label="Arbeid og tiltak som er gjennomført"
+                label={t('case_reports.actions_label', 'Arbeid og tiltak som er gjennomført')}
                 value={formData.actions}
                 onChange={(e) => setFormData({ ...formData, actions: e.target.value })}
               />
@@ -251,7 +260,7 @@ function CaseReportsContent() {
                 fullWidth
                 multiline
                 rows={3}
-                label="Fremgang og utvikling"
+                label={t('case_reports.progress', 'Fremgang og utvikling')}
                 value={formData.progress}
                 onChange={(e) => setFormData({ ...formData, progress: e.target.value })}
               />
@@ -262,7 +271,7 @@ function CaseReportsContent() {
                 fullWidth
                 multiline
                 rows={3}
-                label="Utfordringer"
+                label={t('case_reports.challenges', 'Utfordringer')}
                 value={formData.challenges}
                 onChange={(e) => setFormData({ ...formData, challenges: e.target.value })}
               />
@@ -273,7 +282,7 @@ function CaseReportsContent() {
                 fullWidth
                 multiline
                 rows={2}
-                label="Faktorer som påvirker"
+                label={t('case_reports.factors', 'Faktorer som påvirker')}
                 value={formData.factors}
                 onChange={(e) => setFormData({ ...formData, factors: e.target.value })}
               />
@@ -284,7 +293,7 @@ function CaseReportsContent() {
                 fullWidth
                 multiline
                 rows={3}
-                label="Vurdering"
+                label={t('case_reports.assessment', 'Vurdering')}
                 value={formData.assessment}
                 onChange={(e) => setFormData({ ...formData, assessment: e.target.value })}
               />
@@ -295,7 +304,7 @@ function CaseReportsContent() {
                 fullWidth
                 multiline
                 rows={3}
-                label="Anbefalinger"
+                label={t('case_reports.recommendations', 'Anbefalinger')}
                 value={formData.recommendations}
                 onChange={(e) => setFormData({ ...formData, recommendations: e.target.value })}
               />
@@ -306,7 +315,7 @@ function CaseReportsContent() {
                 fullWidth
                 multiline
                 rows={2}
-                label="Notater (valgfritt)"
+                label={t('fields.notes_optional', 'Notater (valgfritt)')}
                 value={formData.notes}
                 onChange={(e) => setFormData({ ...formData, notes: e.target.value })}
               />
@@ -315,7 +324,7 @@ function CaseReportsContent() {
           
           <Box sx={{ mt: 3, display: 'flex', gap: 2 }}>
             <Button variant="contained" onClick={handleSave}>
-              {editingReport ? 'Oppdater' : 'Lagre utkast'}
+              {editingReport ? t('common.update', 'Oppdater') : t('case_reports.save_draft', 'Lagre utkast')}
             </Button>
             {editingReport && (
               <Button onClick={() => {
@@ -334,7 +343,7 @@ function CaseReportsContent() {
                   notes: '',
                 });
               }}>
-                Avbryt
+                {t('common.cancel', 'Avbryt')}
               </Button>
             )}
           </Box>

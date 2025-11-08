@@ -23,6 +23,7 @@ import {
 } from '@mui/icons-material';
 import { AdminProvider, useAdmin } from '../../../contexts/AdminContext';
 import AdminLayout from '../../../components/AdminLayout';
+import { useTranslations } from '../../../contexts/TranslationsContext';
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE || 'http://localhost:4000';
 
@@ -52,6 +53,7 @@ interface Analytics {
 
 function DashboardContent() {
   const { fetchWithAuth } = useAdmin();
+  const { t } = useTranslations();
   const [analytics, setAnalytics] = useState<Analytics | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -100,25 +102,25 @@ function DashboardContent() {
 
   const statsCards = [
     {
-      title: 'Total Users',
+      title: t('admin.dashboard.total_users', 'Total Users'),
       value: analytics.users.total_users,
       icon: <PeopleIcon sx={{ fontSize: 40, color: 'primary.main' }} />,
       color: '#1976d2',
     },
     {
-      title: 'Total Logs',
+      title: t('admin.dashboard.total_logs', 'Total Logs'),
       value: analytics.logs.total_logs,
       icon: <LogsIcon sx={{ fontSize: 40, color: 'success.main' }} />,
       color: '#2e7d32',
     },
     {
-      title: 'Total Projects',
+      title: t('admin.dashboard.total_projects', 'Total Projects'),
       value: analytics.projects.total_projects,
       icon: <ProjectsIcon sx={{ fontSize: 40, color: 'warning.main' }} />,
       color: '#ed6c02',
     },
     {
-      title: 'Total Hours Logged',
+      title: t('admin.dashboard.total_hours', 'Total Hours Logged'),
       value: parseFloat(analytics.logs.total_hours || '0').toFixed(1),
       icon: <TrendingIcon sx={{ fontSize: 40, color: 'secondary.main' }} />,
       color: '#9c27b0',
@@ -128,7 +130,7 @@ function DashboardContent() {
   return (
     <Box>
       <Typography variant="h4" gutterBottom>
-        Dashboard
+        {t('admin.dashboard', 'Dashboard')}
       </Typography>
 
       <Grid container spacing={3} sx={{ mb: 4 }}>
@@ -155,30 +157,30 @@ function DashboardContent() {
         <Grid item xs={12} md={6}>
           <Paper elevation={3} sx={{ p: 3 }}>
             <Typography variant="h6" gutterBottom>
-              System Statistics
+              {t('admin.dashboard.system_stats', 'System Statistics')}
             </Typography>
             <List>
               <ListItem>
                 <ListItemText
-                  primary="Active Users (with logs)"
+                  primary={t('admin.dashboard.active_users', 'Active Users (with logs)')}
                   secondary={analytics.logs.active_users}
                 />
               </ListItem>
               <ListItem>
                 <ListItemText
-                  primary="Users with Projects"
+                  primary={t('admin.dashboard.users_with_projects', 'Users with Projects')}
                   secondary={analytics.projects.users_with_projects}
                 />
               </ListItem>
               <ListItem>
                 <ListItemText
-                  primary="Active Projects"
+                  primary={t('admin.dashboard.active_projects', 'Active Projects')}
                   secondary={analytics.projects.active_projects}
                 />
               </ListItem>
               <ListItem>
                 <ListItemText
-                  primary="Active Months"
+                  primary={t('admin.dashboard.active_months', 'Active Months')}
                   secondary={analytics.logs.active_months}
                 />
               </ListItem>
@@ -189,12 +191,12 @@ function DashboardContent() {
         <Grid item xs={12} md={6}>
           <Paper elevation={3} sx={{ p: 3 }}>
             <Typography variant="h6" gutterBottom>
-              Most Active Users (Last 7 Days)
+              {t('admin.dashboard.most_active', 'Most Active Users (Last 7 Days)')}
             </Typography>
             <List>
               {analytics.recent_active_users.length === 0 ? (
                 <ListItem>
-                  <ListItemText secondary="No activity in the last 7 days" />
+                  <ListItemText secondary={t('admin.dashboard.no_activity_7d', 'No activity in the last 7 days')} />
                 </ListItem>
               ) : (
                 analytics.recent_active_users.map((user, index) => (
@@ -216,7 +218,7 @@ function DashboardContent() {
 
       <Box sx={{ mt: 2, textAlign: 'right' }}>
         <Typography variant="caption" color="textSecondary">
-          Last updated: {new Date(analytics.timestamp).toLocaleString()}
+          {t('common.last_updated', 'Last updated:')} {new Date(analytics.timestamp).toLocaleString()}
         </Typography>
       </Box>
     </Box>

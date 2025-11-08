@@ -6,10 +6,12 @@ import { Check, Close, Visibility } from '@mui/icons-material';
 import { TableVirtuoso } from 'react-virtuoso';
 import { CompanyProvider, useCompany } from '../../../contexts/CompanyContext';
 import PortalLayout from '../../../components/PortalLayout';
+import { useTranslations } from '../../../contexts/TranslationsContext';
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE || 'http://localhost:4000';
 
 function ReportsContent() {
+  const { t } = useTranslations();
   const { fetchWithAuth } = useCompany();
   const [reports, setReports] = useState<any[]>([]);
   const [selectedReport, setSelectedReport] = useState<any>(null);
@@ -31,7 +33,7 @@ function ReportsContent() {
   };
 
   const handleApprove = async (id: number) => {
-    if (!confirm('Godkjenn denne rapporten?')) return;
+    if (!confirm(t('portal.reports.approve_confirm', 'Godkjenn denne rapporten?'))) return;
     try {
       await fetchWithAuth(`${API_BASE}/api/company/case-reports/${id}/approve`, { method: 'POST' });
       loadReports();
@@ -67,7 +69,7 @@ function ReportsContent() {
 
   return (
     <Box>
-      <Typography variant="h4" gutterBottom>Saksrapporter</Typography>
+      <Typography variant="h4" gutterBottom>{t('portal.reports.title', 'Saksrapporter')}</Typography>
       
       <Paper elevation={3} sx={{ height: 600 }}>
         <TableVirtuoso
@@ -80,12 +82,12 @@ function ReportsContent() {
           }}
           fixedHeaderContent={() => (
             <TableRow>
-              <TableCell sx={{ bgcolor: 'background.paper', fontWeight: 'bold' }}>Bruker</TableCell>
-              <TableCell sx={{ bgcolor: 'background.paper', fontWeight: 'bold' }}>Saksnr</TableCell>
-              <TableCell sx={{ bgcolor: 'background.paper', fontWeight: 'bold' }}>Måned</TableCell>
-              <TableCell sx={{ bgcolor: 'background.paper', fontWeight: 'bold' }}>Status</TableCell>
-              <TableCell sx={{ bgcolor: 'background.paper', fontWeight: 'bold' }}>Innsendt</TableCell>
-              <TableCell align="right" sx={{ bgcolor: 'background.paper', fontWeight: 'bold' }}>Handlinger</TableCell>
+              <TableCell sx={{ bgcolor: 'background.paper', fontWeight: 'bold' }}>{t('portal.reports.user', 'Bruker')}</TableCell>
+              <TableCell sx={{ bgcolor: 'background.paper', fontWeight: 'bold' }}>{t('portal.reports.case', 'Saksnr')}</TableCell>
+              <TableCell sx={{ bgcolor: 'background.paper', fontWeight: 'bold' }}>{t('portal.reports.month', 'Måned')}</TableCell>
+              <TableCell sx={{ bgcolor: 'background.paper', fontWeight: 'bold' }}>{t('portal.reports.status', 'Status')}</TableCell>
+              <TableCell sx={{ bgcolor: 'background.paper', fontWeight: 'bold' }}>{t('portal.reports.submitted', 'Innsendt')}</TableCell>
+              <TableCell align="right" sx={{ bgcolor: 'background.paper', fontWeight: 'bold' }}>{t('table.actions', 'Handlinger')}</TableCell>
             </TableRow>
           )}
           itemContent={(index, report) => (
@@ -119,57 +121,57 @@ function ReportsContent() {
 
       {/* View Dialog */}
       <Dialog open={!!selectedReport && !showRejectDialog} onClose={() => setSelectedReport(null)} maxWidth="md" fullWidth>
-        <DialogTitle>Rapport - {selectedReport?.case_id} ({selectedReport?.month})</DialogTitle>
+        <DialogTitle>{t('portal.reports.view_title', 'Rapport')} - {selectedReport?.case_id} ({selectedReport?.month})</DialogTitle>
         <DialogContent>
           <Box sx={{ '& > *': { mb: 2 } }}>
             <Box>
-              <Typography variant="subtitle2" color="text.secondary">Bakgrunn</Typography>
+              <Typography variant="subtitle2" color="text.secondary">{t('portal.reports.background', 'Bakgrunn')}</Typography>
               <Typography>{selectedReport?.background || '-'}</Typography>
             </Box>
             <Box>
-              <Typography variant="subtitle2" color="text.secondary">Tiltak gjennomført</Typography>
+              <Typography variant="subtitle2" color="text.secondary">{t('portal.reports.actions_done', 'Tiltak gjennomført')}</Typography>
               <Typography>{selectedReport?.actions || '-'}</Typography>
             </Box>
             <Box>
-              <Typography variant="subtitle2" color="text.secondary">Fremgang</Typography>
+              <Typography variant="subtitle2" color="text.secondary">{t('portal.reports.progress', 'Fremgang')}</Typography>
               <Typography>{selectedReport?.progress || '-'}</Typography>
             </Box>
             <Box>
-              <Typography variant="subtitle2" color="text.secondary">Utfordringer</Typography>
+              <Typography variant="subtitle2" color="text.secondary">{t('portal.reports.challenges', 'Utfordringer')}</Typography>
               <Typography>{selectedReport?.challenges || '-'}</Typography>
             </Box>
             <Box>
-              <Typography variant="subtitle2" color="text.secondary">Vurdering</Typography>
+              <Typography variant="subtitle2" color="text.secondary">{t('portal.reports.assessment', 'Vurdering')}</Typography>
               <Typography>{selectedReport?.assessment || '-'}</Typography>
             </Box>
             <Box>
-              <Typography variant="subtitle2" color="text.secondary">Anbefalinger</Typography>
+              <Typography variant="subtitle2" color="text.secondary">{t('portal.reports.recommendations', 'Anbefalinger')}</Typography>
               <Typography>{selectedReport?.recommendations || '-'}</Typography>
             </Box>
           </Box>
         </DialogContent>
         <DialogActions>
-          <Button onClick={() => setSelectedReport(null)}>Lukk</Button>
+          <Button onClick={() => setSelectedReport(null)}>{t('common.close', 'Lukk')}</Button>
         </DialogActions>
       </Dialog>
 
       {/* Reject Dialog */}
       <Dialog open={showRejectDialog} onClose={() => { setShowRejectDialog(false); setRejectionReason(''); }} maxWidth="sm" fullWidth>
-        <DialogTitle>Avslå rapport</DialogTitle>
+        <DialogTitle>{t('portal.reports.reject_title', 'Avslå rapport')}</DialogTitle>
         <DialogContent>
           <TextField
             fullWidth
             multiline
             rows={4}
-            label="Begrunnelse"
+            label={t('portal.reports.reason', 'Begrunnelse')}
             value={rejectionReason}
             onChange={(e) => setRejectionReason(e.target.value)}
             margin="normal"
           />
         </DialogContent>
         <DialogActions>
-          <Button onClick={() => { setShowRejectDialog(false); setRejectionReason(''); }}>Avbryt</Button>
-          <Button onClick={handleReject} variant="contained" color="error">Avslå</Button>
+          <Button onClick={() => { setShowRejectDialog(false); setRejectionReason(''); }}>{t('common.cancel', 'Avbryt')}</Button>
+          <Button onClick={handleReject} variant="contained" color="error">{t('portal.reports.reject', 'Avslå')}</Button>
         </DialogActions>
       </Dialog>
     </Box>

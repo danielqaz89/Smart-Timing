@@ -19,6 +19,7 @@ import {
   VisibilityOff,
   AdminPanelSettings as AdminIcon,
 } from '@mui/icons-material';
+import { useTranslations } from '../../contexts/TranslationsContext';
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE || 'http://localhost:4000';
 
@@ -29,6 +30,7 @@ export default function AdminLoginPage() {
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const { t } = useTranslations();
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -65,10 +67,10 @@ export default function AdminLoginPage() {
     <Container maxWidth="sm">
       <Box sx={{ mt: 8, display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
         <Paper elevation={3} sx={{ p: 4, width: '100%', maxWidth: 400 }}>
-          <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', mb: 3 }}>
-            <AdminIcon sx={{ fontSize: 40, mr: 1, color: 'primary.main' }} />
+          <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', mb: 3, gap: 1 }}>
+            <img src="/icons/logo.svg" alt="Smart Timing" style={{ height: 36 }} />
             <Typography variant="h4" component="h1">
-              Admin Login
+              {t('admin.login.title', 'Admin Login')}
             </Typography>
           </Box>
 
@@ -81,7 +83,7 @@ export default function AdminLoginPage() {
           <form onSubmit={handleLogin}>
             <TextField
               fullWidth
-              label="Username or Email"
+              label={t('admin.login.username_or_email', 'Username or Email')}
               value={username}
               onChange={(e) => setUsername(e.target.value)}
               margin="normal"
@@ -92,7 +94,7 @@ export default function AdminLoginPage() {
 
             <TextField
               fullWidth
-              label="Password"
+              label={t('admin.login.password', 'Password')}
               type={showPassword ? 'text' : 'password'}
               value={password}
               onChange={(e) => setPassword(e.target.value)}
@@ -121,13 +123,13 @@ export default function AdminLoginPage() {
               sx={{ mt: 3 }}
               disabled={loading}
             >
-              {loading ? <CircularProgress size={24} /> : 'Login'}
+              {loading ? <CircularProgress size={24} /> : t('admin.login.submit', 'Login')}
             </Button>
           </form>
 
           <Box sx={{ mt: 3, textAlign: 'center' }}>
             <Typography variant="caption" color="text.secondary">
-              Default credentials: admin / Admin@123
+              {t('admin.login.default_creds', 'Default credentials: admin / Admin@123')}
             </Typography>
           </Box>
         </Paper>

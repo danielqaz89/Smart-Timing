@@ -3,6 +3,7 @@
 import { useState } from 'react';
 import { Box, Card, CardContent, TextField, Button, Typography, Alert, Container } from '@mui/material';
 import { useCompany, CompanyProvider } from '../../../contexts/CompanyContext';
+import { useTranslations } from '../../../contexts/TranslationsContext';
 
 function LoginContent() {
   const [email, setEmail] = useState('');
@@ -10,6 +11,7 @@ function LoginContent() {
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const { login } = useCompany();
+  const { t } = useTranslations();
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -30,11 +32,14 @@ function LoginContent() {
       <Box sx={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
         <Card sx={{ width: '100%', maxWidth: 400 }}>
           <CardContent sx={{ p: 4 }}>
+            <Box sx={{ display: 'flex', justifyContent: 'center', mb: 2 }}>
+              <img src="/icons/logo.svg" alt="Smart Timing" style={{ height: 36 }} />
+            </Box>
             <Typography variant="h4" gutterBottom align="center">
-              Bedriftsportal
+              {t('portal.login.title', 'Bedriftsportal')}
             </Typography>
             <Typography variant="body2" color="text.secondary" align="center" sx={{ mb: 3 }}>
-              Logg inn med bedriftskonto
+              {t('portal.login.subtitle', 'Logg inn med bedriftskonto')}
             </Typography>
 
             {error && <Alert severity="error" sx={{ mb: 2 }}>{error}</Alert>}
@@ -42,7 +47,7 @@ function LoginContent() {
             <form onSubmit={handleSubmit}>
               <TextField
                 fullWidth
-                label="E-post"
+                label={t('fields.email', 'E-post')}
                 type="email"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
@@ -52,7 +57,7 @@ function LoginContent() {
               />
               <TextField
                 fullWidth
-                label="Passord"
+                label={t('portal.login.password', 'Passord')}
                 type="password"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
@@ -67,7 +72,7 @@ function LoginContent() {
                 sx={{ mt: 3 }}
                 size="large"
               >
-                {loading ? 'Logger inn...' : 'Logg inn'}
+                {loading ? t('portal.login.loading', 'Logger inn...') : t('portal.login.submit', 'Logg inn')}
               </Button>
             </form>
           </CardContent>

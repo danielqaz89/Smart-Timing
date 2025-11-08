@@ -29,14 +29,19 @@ import {
   Settings as SettingsIcon,
   AccountCircle,
   Logout as LogoutIcon,
+  Translate as TranslateIcon,
+  RocketLaunch as RocketLaunchIcon,
 } from '@mui/icons-material';
 import { useCompany } from '../contexts/CompanyContext';
 import { useRouter, usePathname } from 'next/navigation';
 import { useState } from 'react';
+import { useLanguage } from '../contexts/LanguageContext';
+import { useTranslations } from '../contexts/TranslationsContext';
 
 const drawerWidth = 260;
 
 interface NavigationItem {
+  key: string;
   label: string;
   path: string;
   icon: ReactNode;
@@ -44,13 +49,14 @@ interface NavigationItem {
 }
 
 const navigationItems: NavigationItem[] = [
-  { label: 'Dashboard', path: '/portal/dashboard', icon: <DashboardIcon />, roles: ['admin', 'case_manager', 'member'] },
-  { label: 'Invitasjoner', path: '/portal/invites', icon: <PersonAddIcon />, roles: ['admin'] },
-  { label: 'Brukere', path: '/portal/users', icon: <PeopleIcon />, roles: ['admin', 'case_manager'] },
-  { label: 'Saker', path: '/portal/cases', icon: <FolderIcon />, roles: ['admin', 'case_manager'] },
-  { label: 'Maler', path: '/portal/templates', icon: <DescriptionIcon />, roles: ['admin'] },
-  { label: 'Rapporter', path: '/portal/reports', icon: <AssessmentIcon />, roles: ['admin', 'case_manager'] },
-  { label: 'Innstillinger', path: '/portal/settings', icon: <SettingsIcon />, roles: ['admin'] },
+  { key: 'portal.dashboard', label: 'Dashboard', path: '/portal/dashboard', icon: <DashboardIcon />, roles: ['admin', 'case_manager', 'member'] },
+  { key: 'portal.onboarding', label: 'Onboarding', path: '/portal/onboarding', icon: <RocketLaunchIcon />, roles: ['admin'] },
+  { key: 'portal.invites', label: 'Invitasjoner', path: '/portal/invites', icon: <PersonAddIcon />, roles: ['admin'] },
+  { key: 'portal.users', label: 'Brukere', path: '/portal/users', icon: <PeopleIcon />, roles: ['admin', 'case_manager'] },
+  { key: 'portal.cases', label: 'Saker', path: '/portal/cases', icon: <FolderIcon />, roles: ['admin', 'case_manager'] },
+  { key: 'portal.templates', label: 'Maler', path: '/portal/templates', icon: <DescriptionIcon />, roles: ['admin'] },
+  { key: 'portal.reports', label: 'Rapporter', path: '/portal/reports', icon: <AssessmentIcon />, roles: ['admin', 'case_manager'] },
+  { key: 'portal.settings', label: 'Innstillinger', path: '/portal/settings', icon: <SettingsIcon />, roles: ['admin'] },
 ];
 
 export default function PortalLayout({ children }: { children: ReactNode }) {
@@ -58,6 +64,8 @@ export default function PortalLayout({ children }: { children: ReactNode }) {
   const router = useRouter();
   const pathname = usePathname();
   const [anchorEl, setAnchorEl] = useState<null | HTMLElement>(null);
+  const { language, setLanguage } = useLanguage();
+  const { t } = useTranslations();
 
   const handleMenuOpen = (event: React.MouseEvent<HTMLElement>) => {
     setAnchorEl(event.currentTarget);
@@ -78,9 +86,9 @@ export default function PortalLayout({ children }: { children: ReactNode }) {
 
   const getRoleLabel = (role: string) => {
     switch (role) {
-      case 'admin': return 'Administrator';
-      case 'case_manager': return 'Saksbehandler';
-      case 'member': return 'Medlem';
+      case 'admin': return t('roles.admin', 'Administrator');
+      case 'case_manager': return t('roles.case_manager', 'Saksbehandler');
+      case 'member': return t('roles.member', 'Medlem');
       default: return role;
     }
   };
@@ -107,7 +115,7 @@ export default function PortalLayout({ children }: { children: ReactNode }) {
       >
         <Toolbar>
           <Typography variant="h6" noWrap component="div" sx={{ flexGrow: 1 }}>
-            {company?.name || 'Bedriftsportal'}
+            {company?.name || t('portal.title', 'Bedriftsportal')}
           </Typography>
           
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
@@ -136,11 +144,17 @@ export default function PortalLayout({ children }: { children: ReactNode }) {
               </Typography>
             </MenuItem>
             <Divider />
+            <MenuItem onClick={() => { setLanguage(language === 'no' ? 'en' : 'no'); handleMenuClose(); }}>
+              <ListItemIcon>
+                <TranslateIcon fontSize="small" />
+              </ListItemIcon>
+              {language === 'no' ? t('common.switch_to_english', 'Switch to English') : t('common.switch_to_norwegian', 'Bytt til Norsk')}
+            </MenuItem>
             <MenuItem onClick={handleLogout}>
               <ListItemIcon>
                 <LogoutIcon fontSize="small" />
               </ListItemIcon>
-              Logg ut
+              {t('common.logout', 'Logg ut')}
             </MenuItem>
           </Menu>
         </Toolbar>
@@ -166,9 +180,7 @@ export default function PortalLayout({ children }: { children: ReactNode }) {
               style={{ maxWidth: '80%', maxHeight: '60px', objectFit: 'contain' }} 
             />
           ) : (
-            <Typography variant="h6" color="primary">
-              Smart Timing
-            </Typography>
+            <img src="/icons/logo.svg" alt="Smart Timing" style={{ maxHeight: 48 }} />
           )}
         </Toolbar>
         <Divider />
@@ -180,7 +192,7 @@ export default function PortalLayout({ children }: { children: ReactNode }) {
                 onClick={() => router.push(item.path)}
               >
                 <ListItemIcon>{item.icon}</ListItemIcon>
-                <ListItemText primary={item.label} />
+                <ListItemText primary={t(item.key, item.label)} />
               </ListItemButton>
             </ListItem>
           ))}
