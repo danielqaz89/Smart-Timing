@@ -16,6 +16,10 @@ import {
   StepLabel,
   Stepper,
   Typography,
+  Dialog,
+  DialogTitle,
+  DialogContent,
+  DialogActions,
 } from '@mui/material';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import RadioButtonUncheckedIcon from '@mui/icons-material/RadioButtonUnchecked';
@@ -34,6 +38,8 @@ function useOnboardingStatus() {
   const [hasTemplates, setHasTemplates] = useState(false);
   const [hasInvitesOrUsers, setHasInvitesOrUsers] = useState(false);
   const [hasIntegrations, setHasIntegrations] = useState(false);
+  const [hasEmail, setHasEmail] = useState(false);
+  const [emailMethod, setEmailMethod] = useState<'gmail' | 'smtp' | ''>('');
 
   useEffect(() => {
     let cancelled = false;
@@ -58,15 +64,21 @@ function useOnboardingStatus() {
         const invitesCount = Array.isArray(invitesRes?.invites) ? invitesRes.invites.length : 0;
         setHasInvitesOrUsers((usersCount > 1) || invitesCount > 0);
 
-        // Integrations (Google or Sheets/Webhook in settings)
-        const [authStatus, settings] = await Promise.all([
+        // Integrations (Google or Sheets/Webhook in settings) and company email
+        const [authStatus, settings, emailSettings, gmailCompany] = await Promise.all([
           getGoogleAuthStatus().catch(()=>({ isConnected: false, needsReauth: false })),
           fetchSettings('default').catch(()=>({} as any)),
+          fetchWithAuth(`${API_BASE}/api/company/email-settings`).then(r=>r.json()).catch(()=>({})),
+          fetchWithAuth(`${API_BASE}/api/company/email/google/status`).then(r=>r.json()).catch(()=>({ isConnected: false })),
         ]);
         if (cancelled) return;
         const sheets = !!settings?.sheet_url;
         const webhook = !!settings?.webhook_active;
-        setHasIntegrations(!!authStatus?.isConnected || sheets || webhook);
+        const emailConfigured = (emailSettings?.email_method === 'gmail' && !!gmailCompany?.isConnected) ||
+                                (emailSettings?.email_method === 'smtp' && !!emailSettings?.smtp_host);
+        setEmailMethod(emailSettings?.email_method || '');
+        setHasEmail(!!emailConfigured);
+        setHasIntegrations(!!authStatus?.isConnected || sheets || webhook || emailConfigured);
 
       } catch (e: any) {
         if (cancelled) return;
@@ -106,12 +118,13 @@ function useOnboardingStatus() {
   const completed = steps.filter(s => s.done).length;
   const total = steps.length;
 
-  return { loading, error, steps, completed, total };
+  return { loading, error, steps, completed, total, hasEmail, emailMethod };
 }
 
 function OnboardingContent() {
   const { t } = useTranslations();
-  const { loading, error, steps, completed, total } = useOnboardingStatus();
+  const { loading, error, steps, completed, total, hasEmail, emailMethod } = useOnboardingStatus();
+  const [smtpHelpOpen, setSmtpHelpOpen] = useState(false);
 
   // Allow dismiss in localStorage
   const [dismissed, setDismissed] = useState<boolean>(() => {
@@ -165,6 +178,65 @@ try { return window.localStorage.getItem('onboarding_dismissed') === 'true'; } c
                   </Step>
                 ))}
               </Stepper>
+
+              {/* Integration cards */}
+              <Grid container spacing={2}>
+                <Grid item xs={12} md={6} lg={4}>
+                  <Card>
+                    <CardContent>
+                      <Stack spacing={1}>
+                        <Typography variant="h6">{t('portal.onboarding.email_card_title', 'E-postlevering')}</Typography>
+                        <Stack direction="row" spacing={1} alignItems="center">
+                          <Chip color={hasEmail ? 'success' : 'default'} size="small" label={hasEmail ? (emailMethod === 'gmail' ? 'Gmail tilkoblet' : 'SMTP konfigurert') : 'Ikke konfigurert'} />
+                          <Link href="/portal/settings" passHref legacyBehavior>
+                            <Button size="small" variant="outlined" endIcon={<LaunchIcon />}>{t('common.open', 'Åpne')}</Button>
+                          </Link>
+                          <Button size="small" onClick={() => setSmtpHelpOpen(true)}>{t('portal.onboarding.email_help_btn', 'Hjelp for SMTP')}</Button>
+                        </Stack>
+                        <Typography variant="body2" color="text.secondary">
+                          {t('portal.onboarding.email_card_desc', 'Velg Gmail eller SMTP som leverandør for utsending av timelister/rapporter og invitasjoner.')}
+                        </Typography>
+                      </Stack>
+                    </CardContent>
+                  </Card>
+                </Grid>
+              </Grid>
+
+              {/* SMTP help dialog (onboarding) */}
+              <Dialog open={smtpHelpOpen} onClose={() => setSmtpHelpOpen(false)} maxWidth="md" fullWidth>
+                <DialogTitle>{t('smtp.help.title', 'Hvor finner vi SMTP-innstillinger?')}</DialogTitle>
+                <DialogContent dividers>
+                  <Typography variant="body2" sx={{ mb: 1 }}>
+                    {t('smtp.help.ask_it', 'Hvis dere ikke har SMTP-verdiene, spør IT-avdelingen eller e-postleverandøren. Be om følgende:')}
+                  </Typography>
+                  <ul style={{ marginTop: 0 }}>
+                    <li>SMTP-server (vertsnavn), f.eks. smtp.office365.com eller smtp.gmail.com</li>
+                    <li>Port og sikkerhet: 587 (TLS) eller 465 (SSL)</li>
+                    <li>Brukernavn (ofte e-postadresse)</li>
+                    <li>App-passord eller tjenestekontopassord (IKKE vanlig passord)</li>
+                  </ul>
+                  <Typography variant="subtitle2" sx={{ mt: 2 }}>{t('smtp.help.providers', 'Typiske leverandører')}</Typography>
+                  <ul style={{ marginTop: 0 }}>
+                    <li>Microsoft 365 / Outlook: smtp.office365.com • port 587 • TLS. SMTP AUTH kan være deaktivert – be IT aktivere for postkassen.</li>
+                    <li>Google Workspace / Gmail: smtp.gmail.com • 465/587 • app-passord med tofaktor. Alternativt velg “Gmail”-leverandør og koble til Google.</li>
+                    <li>iCloud: smtp.mail.me.com • 587 • app-passord</li>
+                    <li>Yahoo: smtp.mail.yahoo.com • 465 • app-passord</li>
+                    <li>Proton: smtp.protonmail.ch • 587 • Bridge/app-passord</li>
+                  </ul>
+                  <Typography variant="body2" sx={{ mt: 1 }}>
+                    {t('smtp.help.tip', 'Tips: Bruk alltid app-spesifikke passord. Del aldri hovedpassord. Dere kan også hoppe over nå og konfigurere senere.')}
+                  </Typography>
+                  <Typography variant="body2" sx={{ mt: 1 }}>
+                    {t('smtp.help.alt_gmail', 'Alternativ: Velg “Gmail” som leverandør under Innstillinger og klikk “Koble til Google”.')}
+                  </Typography>
+                </DialogContent>
+                <DialogActions>
+                  <Button onClick={() => setSmtpHelpOpen(false)}>Lukk</Button>
+                  <Link href="/portal/settings" passHref legacyBehavior>
+                    <Button autoFocus variant="contained">Åpne innstillinger</Button>
+                  </Link>
+                </DialogActions>
+              </Dialog>
 
               <Stack direction="row" spacing={1}>
                 {!dismissed ? (

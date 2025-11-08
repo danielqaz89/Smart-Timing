@@ -475,6 +475,12 @@ async function initTables(){
     ALTER TABLE companies ADD COLUMN IF NOT EXISTS enforced_timesheet_to TEXT;
     ALTER TABLE companies ADD COLUMN IF NOT EXISTS enforced_timesheet_cc TEXT;
     ALTER TABLE companies ADD COLUMN IF NOT EXISTS enforced_timesheet_bcc TEXT;
+    ALTER TABLE companies ADD COLUMN IF NOT EXISTS email_method TEXT CHECK (email_method IN ('gmail','smtp'));
+    ALTER TABLE companies ADD COLUMN IF NOT EXISTS smtp_host TEXT;
+    ALTER TABLE companies ADD COLUMN IF NOT EXISTS smtp_port INT;
+    ALTER TABLE companies ADD COLUMN IF NOT EXISTS smtp_secure BOOLEAN;
+    ALTER TABLE companies ADD COLUMN IF NOT EXISTS smtp_user TEXT;
+    ALTER TABLE companies ADD COLUMN IF NOT EXISTS smtp_pass TEXT;
     ALTER TABLE company_document_templates ADD COLUMN IF NOT EXISTS template_css TEXT;
     ALTER TABLE project_info ADD COLUMN IF NOT EXISTS is_active BOOLEAN DEFAULT true;
     ALTER TABLE project_info ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT NOW();
@@ -487,6 +493,9 @@ async function initTables(){
     ALTER TABLE log_row ADD COLUMN IF NOT EXISTS archived_at TIMESTAMP;
     ALTER TABLE log_row ADD COLUMN IF NOT EXISTS case_id TEXT;
     ALTER TABLE log_row ADD COLUMN IF NOT EXISTS company_user_id INT REFERENCES company_users(id) ON DELETE SET NULL;
+    ALTER TABLE company_users ADD COLUMN IF NOT EXISTS google_access_token TEXT;
+    ALTER TABLE company_users ADD COLUMN IF NOT EXISTS google_refresh_token TEXT;
+    ALTER TABLE company_users ADD COLUMN IF NOT EXISTS google_token_expiry TIMESTAMP;
     ALTER TABLE user_settings ADD COLUMN IF NOT EXISTS invoice_reminder_active BOOLEAN DEFAULT false;
     ALTER TABLE user_settings ADD COLUMN IF NOT EXISTS theme_mode TEXT DEFAULT 'dark';
     ALTER TABLE user_settings ADD COLUMN IF NOT EXISTS view_mode TEXT DEFAULT 'month';
@@ -494,6 +503,17 @@ async function initTables(){
     ALTER TABLE user_settings ADD COLUMN IF NOT EXISTS google_access_token TEXT;
     ALTER TABLE user_settings ADD COLUMN IF NOT EXISTS google_refresh_token TEXT;
     ALTER TABLE user_settings ADD COLUMN IF NOT EXISTS google_token_expiry TIMESTAMP;
+
+    -- Reminder configuration (Gmail-based)
+    ALTER TABLE user_settings ADD COLUMN IF NOT EXISTS invoice_reminder_day SMALLINT;
+    ALTER TABLE user_settings ADD COLUMN IF NOT EXISTS invoice_reminder_hour SMALLINT;
+    ALTER TABLE user_settings ADD COLUMN IF NOT EXISTS invoice_reminder_timezone TEXT;
+    ALTER TABLE user_settings ADD COLUMN IF NOT EXISTS invoice_reminder_recipients TEXT;
+    ALTER TABLE user_settings ADD COLUMN IF NOT EXISTS invoice_reminder_attach_pdf BOOLEAN DEFAULT false;
+    ALTER TABLE user_settings ADD COLUMN IF NOT EXISTS invoice_reminder_subject TEXT;
+    ALTER TABLE user_settings ADD COLUMN IF NOT EXISTS invoice_reminder_message TEXT;
+    ALTER TABLE user_settings ADD COLUMN IF NOT EXISTS invoice_reminder_last_sent TIMESTAMP;
+    ALTER TABLE user_settings ADD COLUMN IF NOT EXISTS invoice_reminder_last_month TEXT;
 
     -- Ensure CMS tables have columns required by indexes and code (legacy DB compat)
     ALTER TABLE cms_pages ADD COLUMN IF NOT EXISTS page_id TEXT;
@@ -1209,6 +1229,34 @@ async function initTables(){
     ON CONFLICT (translation_key) DO NOTHING
   `;
 
+  // Additional translations for portal email/SMTP help
+  await pool.query(`
+    INSERT INTO cms_translations (translation_key, category, no, en) VALUES
+      ('portal.settings.email_delivery','portal','E-postlevering','Email delivery'),
+      ('portal.settings.provider','portal','Leverandør','Provider'),
+      ('portal.settings.smtp_help','portal','Trenger hjelp med SMTP?','Need help with SMTP?'),
+      ('portal.settings.smtp_host','portal','SMTP Host','SMTP Host'),
+      ('portal.settings.port','portal','Port','Port'),
+      ('portal.settings.secure_tls','portal','Secure (TLS)','Secure (TLS)'),
+      ('portal.settings.user','portal','Bruker','User'),
+      ('portal.settings.password_app','portal','Passord (app-passord)','Password (app password)'),
+      ('portal.settings.save_email','portal','Lagre e-postinnstillinger','Save email settings'),
+      ('portal.settings.send_test_to','portal','Send test til','Send test to'),
+      ('portal.settings.gmail_connected','portal','Google tilkoblet','Google connected'),
+      ('portal.settings.not_connected','portal','Ikke tilkoblet','Not connected'),
+      ('portal.settings.connect_google','portal','Koble til Google','Connect Google'),
+      ('portal.settings.disconnect_google','portal','Koble fra','Disconnect'),
+      ('portal.onboarding.email_card_title','portal','E-postlevering','Email delivery'),
+      ('portal.onboarding.email_card_desc','portal','Velg Gmail eller SMTP som leverandør for utsending av timelister/rapporter og invitasjoner.','Choose Gmail or SMTP as the provider for sending timesheets/reports and invites.'),
+      ('portal.onboarding.email_help_btn','portal','Hjelp for SMTP','SMTP help'),
+      ('smtp.help.title','portal','Hvor finner vi SMTP-innstillinger?','Where do we find SMTP settings?'),
+      ('smtp.help.ask_it','portal','Hvis dere ikke har SMTP-verdiene, spør IT-avdelingen eller e-postleverandøren. Be om følgende:','If you don’t have SMTP values, ask your IT department or email provider. Ask for:'),
+      ('smtp.help.providers','portal','Typiske leverandører','Typical providers'),
+      ('smtp.help.tip','portal','Tips: Bruk alltid app-spesifikke passord. Del aldri hovedpassord. Dere kan også hoppe over nå og konfigurere senere.','Tip: Always use app-specific passwords. Never share your main password. You can also skip now and configure later.'),
+      ('smtp.help.alt_gmail','portal','Alternativ: Velg “Gmail” som leverandør og klikk “Koble til Google”.','Alternative: Choose “Gmail” as provider and click “Connect Google”.')
+    ON CONFLICT (translation_key) DO NOTHING
+  `);
+
   // Guarded index creation for legacy DBs (only if columns exist)
   await pool.query(`
     DO $$ BEGIN
@@ -1373,6 +1421,8 @@ function guessSmtpByEmail(email){
 
 // POST /api/timesheet/send { month: 'YYYYMM', senderEmail, recipientEmail, format: 'xlsx'|'pdf', smtpPass? }
 app.post("/api/timesheet/send", async (req, res) => {
+  // Deprecated: use Gmail-based endpoint instead
+  return res.status(410).json({ error: 'Deprecated: Use /api/timesheet/send-gmail with Google OAuth' });
   try {
     const { month, senderEmail, recipientEmail, format, smtpPass } = req.body || {};
     if (!month || !senderEmail || !recipientEmail || !format) return res.status(400).json({ error: "Missing fields" });
@@ -1595,6 +1645,213 @@ app.post("/api/timesheet/send-gmail", async (req, res) => {
   }
 });
 
+// ===== REMINDERS (GMAIL-ONLY) =====
+// Utility: get current date parts in a specific timezone
+function getNowPartsInTZ(tz) {
+  const parts = new Intl.DateTimeFormat('en-GB', {
+    timeZone: tz || 'UTC', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', hour12: false
+  }).formatToParts(new Date());
+  const map = Object.fromEntries(parts.map(p => [p.type, p.value]));
+  return { year: Number(map.year), month: Number(map.month), day: Number(map.day), hour: Number(map.hour) };
+}
+
+function yyyymmFromParts(year, month) {
+  return String(year).padStart(4, '0') + String(month).padStart(2, '0');
+}
+
+function prevMonthYYYYMMInTZ(tz) {
+  const { year, month } = getNowPartsInTZ(tz);
+  let y = year; let m = month - 1;
+  if (m === 0) { m = 12; y = year - 1; }
+  return yyyymmFromParts(y, m);
+}
+
+function monthLabelNo(yyyymm) {
+  const year = yyyymm.slice(0,4);
+  const m = Number(yyyymm.slice(4,6));
+  const names = ['januar','februar','mars','april','mai','juni','juli','august','september','oktober','november','desember'];
+  return `${names[m-1] || m} ${year}`;
+}
+
+async function buildTimesheetPdfBuffer(month) {
+  const rows = await getLogsForMonth(month);
+  const doc = new PDFDocument({ margin: 40 });
+  const chunks = [];
+  return await new Promise((resolve, reject) => {
+    doc.on('data', d => chunks.push(d));
+    doc.on('error', reject);
+    doc.on('end', () => resolve(Buffer.concat(chunks)));
+    doc.fontSize(18).text(`Timeliste ${month}`, { align: 'left' }).moveDown();
+    doc.fontSize(10);
+    rows.forEach((r) => {
+      doc.text(`${r.date}  ${String(r.start_time).slice(0,5)}–${String(r.end_time).slice(0,5)}  pause:${r.break_hours}  ${r.activity||''}  ${r.title||''}  ${r.project||''}`);
+    });
+    doc.end();
+  });
+}
+
+async function getFreshOAuthClientForUser(user_id) {
+  // Fetch user's Google OAuth tokens from database
+  const result = await pool.query(
+    'SELECT google_access_token, google_refresh_token, google_token_expiry FROM user_settings WHERE user_id = $1',
+    [user_id]
+  );
+  const settings = result.rows[0];
+  if (!settings?.google_access_token) {
+    throw new Error('Not authenticated with Google. Please connect your Google account first.');
+  }
+  const oauth2Client = getOAuth2Client();
+  oauth2Client.setCredentials({
+    access_token: settings.google_access_token,
+    refresh_token: settings.google_refresh_token,
+    expiry_date: settings.google_token_expiry ? new Date(settings.google_token_expiry).getTime() : null,
+  });
+  if (settings.google_token_expiry && new Date(settings.google_token_expiry) < new Date()) {
+    if (!settings.google_refresh_token) {
+      throw new Error('Token expired. Please reconnect your Google account.');
+    }
+    const { credentials } = await oauth2Client.refreshAccessToken();
+    oauth2Client.setCredentials(credentials);
+    await pool.query(
+      `UPDATE user_settings SET google_access_token = $1, google_token_expiry = $2, updated_at = NOW() WHERE user_id = $3`,
+      [credentials.access_token, credentials.expiry_date ? new Date(credentials.expiry_date) : null, user_id]
+    );
+  }
+  return oauth2Client;
+}
+
+async function sendGmailRaw(user_id, toCsv, subject, bodyText, attachments = []) {
+  const oauth2Client = await getFreshOAuthClientForUser(user_id);
+  const gmail = google.gmail({ version: 'v1', auth: oauth2Client });
+  const oauth2 = google.oauth2({ version: 'v2', auth: oauth2Client });
+  const userInfo = await oauth2.userinfo.get();
+  const senderEmail = userInfo.data.email;
+  const boundary = '----=_Part_' + Date.now();
+  const lines = [
+    `From: ${senderEmail}`,
+    `To: ${toCsv}`,
+    `Subject: ${subject}`,
+    'MIME-Version: 1.0',
+  ];
+  if (attachments.length === 0) {
+    lines.push('Content-Type: text/plain; charset=UTF-8', '', bodyText);
+  } else {
+    lines.push(`Content-Type: multipart/mixed; boundary="${boundary}"`, '', `--${boundary}`);
+    lines.push('Content-Type: text/plain; charset=UTF-8', '', bodyText, '', `--${boundary}`);
+    for (let i = 0; i < attachments.length; i++) {
+      const a = attachments[i];
+      lines.push(
+        `Content-Type: ${a.mimeType}; name="${a.filename}"`,
+        'Content-Transfer-Encoding: base64',
+        `Content-Disposition: attachment; filename="${a.filename}"`,
+        '',
+        (a.contentBuffer instanceof Buffer ? a.contentBuffer : Buffer.from(a.contentBuffer)).toString('base64'),
+        i === attachments.length - 1 ? `--${boundary}--` : `--${boundary}`
+      );
+    }
+  }
+  const message = lines.join('\r\n');
+  const encoded = Buffer.from(message).toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+  await gmail.users.messages.send({ userId: 'me', requestBody: { raw: encoded } });
+  return { from: senderEmail };
+}
+
+// POST /api/reminders/run - trigger due reminders for all users
+app.post('/api/reminders/run', async (req, res) => {
+  try {
+    const rows = (await pool.query(
+      `SELECT user_id, invoice_reminder_active, invoice_reminder_day, invoice_reminder_hour, invoice_reminder_timezone, invoice_reminder_recipients, invoice_reminder_attach_pdf, invoice_reminder_subject, invoice_reminder_message, invoice_reminder_last_month
+       FROM user_settings
+       WHERE invoice_reminder_active = TRUE AND COALESCE(archived, FALSE) = FALSE`
+    )).rows;
+
+    let sent = 0; const details = [];
+    for (const s of rows) {
+      const tz = s.invoice_reminder_timezone || 'Europe/Oslo';
+      const now = getNowPartsInTZ(tz);
+      const daysInMonth = new Date(now.year, now.month, 0).getDate();
+      const targetDay = Math.min(Number(s.invoice_reminder_day || 1), daysInMonth);
+      const hourOk = (s.invoice_reminder_hour == null) || (Number(s.invoice_reminder_hour) === now.hour);
+      if (now.day !== targetDay || !hourOk) continue;
+
+      // Dedupe: only once per month (current month in TZ)
+      const currentMonth = yyyymmFromParts(now.year, now.month);
+      if (s.invoice_reminder_last_month && s.invoice_reminder_last_month === currentMonth) {
+        continue;
+      }
+
+      // Resolve recipients
+      const toCsv = (s.invoice_reminder_recipients || '').split(',').map(x => x.trim()).filter(Boolean).join(', ');
+      let recipients = toCsv;
+      if (!recipients) {
+        const fallback = await pool.query('SELECT timesheet_recipient FROM user_settings WHERE user_id = $1', [s.user_id]);
+        const r = fallback.rows[0]?.timesheet_recipient;
+        if (r) recipients = r;
+      }
+      if (!recipients) { details.push({ user_id: s.user_id, status: 'skipped_no_recipients' }); continue; }
+
+      const prevMonth = prevMonthYYYYMMInTZ(tz);
+      const monthLabel = monthLabelNo(prevMonth);
+      const subject = s.invoice_reminder_subject || `Påminnelse: Send faktura for ${monthLabel}`;
+      const message = s.invoice_reminder_message || `Hei! Dette er en automatisk påminnelse om å sende timeliste/faktura for ${monthLabel}.`;
+
+      const attachments = [];
+      if (s.invoice_reminder_attach_pdf) {
+        const pdf = await buildTimesheetPdfBuffer(prevMonth);
+        attachments.push({ filename: `timeliste-${prevMonth}.pdf`, mimeType: 'application/pdf', contentBuffer: pdf });
+      }
+
+      try {
+        await sendGmailRaw(s.user_id, recipients, subject, message, attachments);
+        await pool.query(
+          `UPDATE user_settings SET invoice_reminder_last_sent = NOW(), invoice_reminder_last_month = $2, updated_at = NOW() WHERE user_id = $1`,
+          [s.user_id, currentMonth]
+        );
+        sent++;
+        details.push({ user_id: s.user_id, status: 'sent', recipients, month: prevMonth });
+      } catch (err) {
+        console.error('Reminder send failed for', s.user_id, err);
+        details.push({ user_id: s.user_id, status: 'error', error: String(err) });
+      }
+    }
+
+    res.json({ ok: true, sent, total_candidates: rows.length, details });
+  } catch (e) {
+    console.error('Reminders run error:', e);
+    res.status(500).json({ error: String(e) });
+  }
+});
+
+// POST /api/reminders/test - send a test reminder immediately
+// Body: { user_id?: 'default', recipients?: string, attach_pdf?: boolean, month?: 'YYYYMM', subject?: string, message?: string }
+app.post('/api/reminders/test', async (req, res) => {
+  try {
+    const user_id = req.body?.user_id || 'default';
+    const settings = (await pool.query('SELECT invoice_reminder_timezone FROM user_settings WHERE user_id = $1', [user_id])).rows[0] || {};
+    const tz = settings.invoice_reminder_timezone || 'Europe/Oslo';
+    const month = (req.body?.month && /^\d{6}$/.test(String(req.body.month))) ? String(req.body.month) : prevMonthYYYYMMInTZ(tz);
+    const monthLabel = monthLabelNo(month);
+
+    const to = String(req.body?.recipients || '').trim() || (await pool.query('SELECT invoice_reminder_recipients FROM user_settings WHERE user_id = $1', [user_id])).rows[0]?.invoice_reminder_recipients || '';
+    if (!to) return res.status(400).json({ error: 'No recipients configured' });
+    const subject = req.body?.subject || `Test: Påminnelse for ${monthLabel}`;
+    const message = req.body?.message || `Dette er en test av påminnelsesfunksjonen for ${monthLabel}.`;
+
+    const attachments = [];
+    const attach = req.body?.attach_pdf === true || req.body?.attach_pdf === 'true';
+    if (attach) {
+      const pdf = await buildTimesheetPdfBuffer(month);
+      attachments.push({ filename: `timeliste-${month}.pdf`, mimeType: 'application/pdf', contentBuffer: pdf });
+    }
+
+    await sendGmailRaw(user_id, to, subject, message, attachments);
+    res.json({ ok: true, to, month });
+  } catch (e) {
+    console.error('Reminder test error:', e);
+    res.status(500).json({ error: String(e) });
+  }
+});
+
 app.post("/api/logs",async(req,r)=>{
   const {date,start,end,breakHours,activity,title,project,place,notes,expenseCoverage, case_id, caseId, company_user_id}=req.body || {};
   const resolvedCaseId = case_id ?? caseId ?? null;
@@ -1806,6 +2063,15 @@ app.get("/api/settings", async (req, res) => {
         sheet_url: null,
         month_nav: null,
         invoice_reminder_active: false,
+        invoice_reminder_day: null,
+        invoice_reminder_hour: null,
+        invoice_reminder_timezone: 'Europe/Oslo',
+        invoice_reminder_recipients: null,
+        invoice_reminder_attach_pdf: false,
+        invoice_reminder_subject: null,
+        invoice_reminder_message: null,
+        invoice_reminder_last_sent: null,
+        invoice_reminder_last_month: null,
         theme_mode: 'dark',
         view_mode: 'month',
         language: 'no',
@@ -1826,16 +2092,32 @@ app.post("/api/settings", async (req, res) => {
       paid_break, tax_pct, hourly_rate,
       timesheet_sender, timesheet_recipient, timesheet_format,
       smtp_app_password, webhook_active, webhook_url, sheet_url, month_nav,
-      invoice_reminder_active, theme_mode, view_mode, language
-    } = req.body;
+      invoice_reminder_active, theme_mode, view_mode, language,
+      invoice_reminder_day, invoice_reminder_hour, invoice_reminder_timezone,
+      invoice_reminder_recipients, invoice_reminder_attach_pdf,
+      invoice_reminder_subject, invoice_reminder_message
+    } = req.body || {};
     
     const result = await pool.query(`
       INSERT INTO user_settings (
         user_id, paid_break, tax_pct, hourly_rate,
         timesheet_sender, timesheet_recipient, timesheet_format,
         smtp_app_password, webhook_active, webhook_url, sheet_url, month_nav, 
-        invoice_reminder_active, theme_mode, view_mode, language, updated_at
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, NOW())
+        invoice_reminder_active, theme_mode, view_mode, language,
+        invoice_reminder_day, invoice_reminder_hour, invoice_reminder_timezone,
+        invoice_reminder_recipients, invoice_reminder_attach_pdf,
+        invoice_reminder_subject, invoice_reminder_message,
+        updated_at
+      ) VALUES (
+        $1, $2, $3, $4,
+        $5, $6, $7,
+        $8, $9, $10, $11, $12,
+        $13, $14, $15, $16,
+        $17, $18, $19,
+        $20, $21,
+        $22, $23,
+        NOW()
+      )
       ON CONFLICT (user_id) DO UPDATE SET
         paid_break = COALESCE($2, user_settings.paid_break),
         tax_pct = COALESCE($3, user_settings.tax_pct),
@@ -1852,11 +2134,23 @@ app.post("/api/settings", async (req, res) => {
         theme_mode = COALESCE($14, user_settings.theme_mode),
         view_mode = COALESCE($15, user_settings.view_mode),
         language = COALESCE($16, user_settings.language),
+        invoice_reminder_day = COALESCE($17, user_settings.invoice_reminder_day),
+        invoice_reminder_hour = COALESCE($18, user_settings.invoice_reminder_hour),
+        invoice_reminder_timezone = COALESCE($19, user_settings.invoice_reminder_timezone),
+        invoice_reminder_recipients = COALESCE($20, user_settings.invoice_reminder_recipients),
+        invoice_reminder_attach_pdf = COALESCE($21, user_settings.invoice_reminder_attach_pdf),
+        invoice_reminder_subject = COALESCE($22, user_settings.invoice_reminder_subject),
+        invoice_reminder_message = COALESCE($23, user_settings.invoice_reminder_message),
         updated_at = NOW()
       RETURNING *
-    `, [userId, paid_break, tax_pct, hourly_rate, timesheet_sender, timesheet_recipient,
-        timesheet_format, smtp_app_password, webhook_active, webhook_url, sheet_url, month_nav,
-        invoice_reminder_active, theme_mode, view_mode, language]);
+    `, [
+      userId, paid_break, tax_pct, hourly_rate, timesheet_sender, timesheet_recipient,
+      timesheet_format, smtp_app_password, webhook_active, webhook_url, sheet_url, month_nav,
+      invoice_reminder_active, theme_mode, view_mode, language,
+      invoice_reminder_day, invoice_reminder_hour, invoice_reminder_timezone,
+      invoice_reminder_recipients, invoice_reminder_attach_pdf,
+      invoice_reminder_subject, invoice_reminder_message,
+    ]);
     
     res.json(result.rows[0]);
   } catch (e) {
@@ -2050,7 +2344,7 @@ app.get("/api/auth/google", async (req, res) => {
 app.get("/api/auth/google/callback", async (req, res) => {
   try {
     const { code, state } = req.query;
-    const user_id = state || 'default';
+    const rawState = String(state || 'default');
     
     if (!code) {
       return res.status(400).send('Authorization code missing');
@@ -2060,6 +2354,33 @@ app.get("/api/auth/google/callback", async (req, res) => {
     
     // Exchange authorization code for tokens
     const { tokens } = await oauth2Client.getToken(code);
+    
+    const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
+
+    // Company portal email connect flow
+    if (rawState.startsWith('company:')) {
+      const company_user_id = rawState.split(':')[1];
+      if (!company_user_id) {
+        return res.redirect(`${frontendUrl}/portal?company_email_auth=error&message=${encodeURIComponent('Invalid state')}`);
+      }
+      await pool.query(`
+        UPDATE company_users
+        SET google_access_token = $1,
+            google_refresh_token = COALESCE($2, google_refresh_token),
+            google_token_expiry = $3,
+            updated_at = NOW()
+        WHERE id = $4
+      `, [
+        tokens.access_token,
+        tokens.refresh_token || null,
+        tokens.expiry_date ? new Date(tokens.expiry_date) : null,
+        Number(company_user_id)
+      ]);
+      return res.redirect(`${frontendUrl}/portal?company_email_auth=success`);
+    }
+
+    // Default user-level flow (timesheets/reports/sheets)
+    const user_id = rawState || 'default';
     
     // Store tokens in database
     await pool.query(`
@@ -2078,7 +2399,6 @@ app.get("/api/auth/google/callback", async (req, res) => {
     ]);
     
     // Redirect back to frontend with success message
-    const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
     res.redirect(`${frontendUrl}/?google_auth=success`);
     
   } catch (e) {
@@ -3088,6 +3408,76 @@ app.put('/api/company/policy', authenticateCompany, requireCompanyRole('admin'),
   } catch (e) { res.status(500).json({ error: String(e) }); }
 });
 
+// Company email settings (choose Gmail or SMTP)
+app.get('/api/company/email-settings', authenticateCompany, requireCompanyRole('admin'), async (req, res) => {
+  try {
+    const row = (await pool.query('SELECT email_method, smtp_host, smtp_port, smtp_secure, smtp_user, (smtp_pass IS NOT NULL) as has_smtp_pass FROM companies WHERE id = $1', [req.companyUser.company_id])).rows[0] || {};
+    res.json(row);
+  } catch (e) { res.status(500).json({ error: String(e) }); }
+});
+
+app.put('/api/company/email-settings', authenticateCompany, requireCompanyRole('admin'), async (req, res) => {
+  try {
+    const { email_method, smtp_host, smtp_port, smtp_secure, smtp_user, smtp_pass } = req.body || {};
+    await pool.query(
+      'UPDATE companies SET email_method = COALESCE($1, email_method), smtp_host = COALESCE($2, smtp_host), smtp_port = COALESCE($3, smtp_port), smtp_secure = COALESCE($4, smtp_secure), smtp_user = COALESCE($5, smtp_user), smtp_pass = COALESCE($6, smtp_pass), updated_at = NOW() WHERE id = $7',
+      [email_method, smtp_host, smtp_port, smtp_secure, smtp_user, smtp_pass, req.companyUser.company_id]
+    );
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: String(e) }); }
+});
+
+// Send a plain test email using the configured provider
+app.post('/api/company/email/test', authenticateCompany, requireCompanyRole('admin'), async (req, res) => {
+  try {
+    const { to, subject, message } = req.body || {};
+    if (!to) return res.status(400).json({ error: 'Recipient (to) is required' });
+    const cfg = (await pool.query('SELECT email_method, smtp_host, smtp_port, smtp_secure, smtp_user, smtp_pass FROM companies WHERE id = $1', [req.companyUser.company_id])).rows[0] || {};
+    const subj = subject || 'Test email from Smart Timing';
+    const text = message || 'Dette er en test-e-post fra Smart Timing.';
+    if (cfg.email_method === 'gmail') {
+      await sendCompanyGmailRaw(req.companyUser.user_id, to, undefined, undefined, subj, text, []);
+      return res.json({ ok: true, provider: 'gmail' });
+    }
+    const provider = cfg.smtp_host ? { host: cfg.smtp_host, port: Number(cfg.smtp_port || 587), secure: Boolean(cfg.smtp_secure) } : guessSmtpByEmail(to);
+    const authUser = cfg.smtp_user || process.env.SMTP_USER || process.env.EMAIL_FROM || 'noreply@smarttiming.no';
+    const authPass = cfg.smtp_pass || process.env.SMTP_PASS || process.env.SMTP_APP_PASSWORD;
+    const transport = nodemailer.createTransport({ ...provider, auth: authPass ? { user: authUser, pass: authPass } : undefined });
+    const fromAddr = process.env.EMAIL_FROM || 'Smart Timing <noreply@smarttiming.no>';
+    await transport.sendMail({ from: fromAddr, to, subject: subj, text });
+    res.json({ ok: true, provider: 'smtp' });
+  } catch (e) { res.status(500).json({ error: String(e) }); }
+});
+
+// Company Gmail status/connect/disconnect
+app.get('/api/company/email/google/status', authenticateCompany, requireCompanyRole('admin'), async (req, res) => {
+  try {
+    const row = (await pool.query('SELECT google_access_token, google_token_expiry FROM company_users WHERE id = $1', [req.companyUser.user_id])).rows[0] || {};
+    const isConnected = !!row.google_access_token;
+    const isExpired = row.google_token_expiry ? new Date(row.google_token_expiry) < new Date() : false;
+    res.json({ isConnected, isExpired, needsReauth: isConnected && isExpired });
+  } catch (e) { res.status(500).json({ error: String(e) }); }
+});
+
+app.get('/api/company/email/google/auth', authenticateCompany, requireCompanyRole('admin'), async (req, res) => {
+  try {
+    const oauth2Client = getOAuth2Client();
+    const scopes = [
+      'https://www.googleapis.com/auth/gmail.send',
+      'https://www.googleapis.com/auth/userinfo.email',
+    ];
+    const authUrl = oauth2Client.generateAuthUrl({ access_type: 'offline', scope: scopes, state: `company:${req.companyUser.user_id}`, prompt: 'consent' });
+    res.json({ authUrl });
+  } catch (e) { res.status(500).json({ error: String(e) }); }
+});
+
+app.delete('/api/company/email/google/disconnect', authenticateCompany, requireCompanyRole('admin'), async (req, res) => {
+  try {
+    await pool.query('UPDATE company_users SET google_access_token = NULL, google_refresh_token = NULL, google_token_expiry = NULL, updated_at = NOW() WHERE id = $1', [req.companyUser.user_id]);
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: String(e) }); }
+});
+
 // Company template endpoints (HTML/CSS with handlebars)
 app.get('/api/company/templates/:type', authenticateCompany, requireCompanyRole('admin'), async (req, res) => {
   try {
@@ -3188,7 +3578,6 @@ app.post('/api/company/templates/:type/send', authenticateCompany, requireCompan
       return res.status(501).json({ error: 'PDF rendering not available', details: String(err) });
     }
 
-    // Email delivery
     // Resolve recipients with company policy enforcement
     const policy = (await pool.query('SELECT enforce_timesheet_recipient, enforced_timesheet_to, enforced_timesheet_cc, enforced_timesheet_bcc FROM companies WHERE id = $1', [req.companyUser.company_id])).rows[0] || {};
     let toEmail = policy.enforce_timesheet_recipient ? String(policy.enforced_timesheet_to || '') : String(to || '');
@@ -3197,24 +3586,43 @@ app.post('/api/company/templates/:type/send', authenticateCompany, requireCompan
 
     const subj = subject || `${t === 'timesheet' ? 'Timeliste' : 'Rapport'} ${data.period.month_label}`;
     const msg = message || `Vedlagt ${t === 'timesheet' ? 'timeliste' : 'rapport'} for ${data.period.month_label}.`;
-    const provider = process.env.SMTP_HOST ? {
-      host: process.env.SMTP_HOST,
-      port: Number(process.env.SMTP_PORT || 587),
-      secure: String(process.env.SMTP_SECURE || 'false').toLowerCase() === 'true',
-    } : guessSmtpByEmail(toEmail);
-    const authUser = process.env.SMTP_USER || process.env.EMAIL_FROM || 'noreply@smarttiming.no';
-    const authPass = process.env.SMTP_PASS || process.env.SMTP_APP_PASSWORD;
-    const transport = nodemailer.createTransport({ ...provider, auth: authPass ? { user: authUser, pass: authPass } : undefined });
-    const fromAddr = process.env.EMAIL_FROM || 'Smart Timing <noreply@smarttiming.no>';
-    await transport.sendMail({
-      from: fromAddr,
-      to: toEmail,
-      cc: ccEmail,
-      bcc: bccEmail,
-      subject: subj,
-      text: msg,
-      attachments: [{ filename: `${t}.pdf`, content: pdf, contentType: 'application/pdf' }],
-    });
+
+    // Company email provider selection
+    const emailCfg = (await pool.query('SELECT email_method, smtp_host, smtp_port, smtp_secure, smtp_user, smtp_pass FROM companies WHERE id = $1', [req.companyUser.company_id])).rows[0] || {};
+
+    if (emailCfg.email_method === 'gmail') {
+      try {
+        // Use the acting admin's Google account
+        const attachments = [{ filename: `${t}.pdf`, mimeType: 'application/pdf', contentBuffer: pdf }];
+        await sendCompanyGmailRaw(req.companyUser.user_id, toEmail, ccEmail, bccEmail, subj, msg, attachments);
+      } catch (err) {
+        return res.status(401).json({ error: 'Gmail not connected for this admin or send failed', details: String(err) });
+      }
+    } else {
+      // SMTP path (configured or fallback)
+      const provider = emailCfg.smtp_host ? {
+        host: emailCfg.smtp_host,
+        port: Number(emailCfg.smtp_port || 587),
+        secure: Boolean(emailCfg.smtp_secure),
+      } : (process.env.SMTP_HOST ? {
+        host: process.env.SMTP_HOST,
+        port: Number(process.env.SMTP_PORT || 587),
+        secure: String(process.env.SMTP_SECURE || 'false').toLowerCase() === 'true',
+      } : guessSmtpByEmail(toEmail));
+      const authUser = emailCfg.smtp_user || process.env.SMTP_USER || process.env.EMAIL_FROM || 'noreply@smarttiming.no';
+      const authPass = emailCfg.smtp_pass || process.env.SMTP_PASS || process.env.SMTP_APP_PASSWORD;
+      const transport = nodemailer.createTransport({ ...provider, auth: authPass ? { user: authUser, pass: authPass } : undefined });
+      const fromAddr = process.env.EMAIL_FROM || 'Smart Timing <noreply@smarttiming.no>';
+      await transport.sendMail({
+        from: fromAddr,
+        to: toEmail,
+        cc: ccEmail,
+        bcc: bccEmail,
+        subject: subj,
+        text: msg,
+        attachments: [{ filename: `${t}.pdf`, content: pdf, contentType: 'application/pdf' }],
+      });
+    }
 
     res.json({ ok: true });
   } catch (e) { res.status(500).json({ error: String(e) }); }
@@ -3417,14 +3825,81 @@ app.get('/api/company/invites', authenticateCompany, requireCompanyRole('admin')
   } catch (e) { res.status(500).json({ error: String(e) }); }
 });
 
-async function sendInviteEmail(to, link, companyName) {
-  const provider = process.env.SMTP_HOST ? {
+async function getFreshOAuthClientForCompanyUser(company_user_id) {
+  const res = await pool.query('SELECT google_access_token, google_refresh_token, google_token_expiry FROM company_users WHERE id = $1', [company_user_id]);
+  const s = res.rows[0];
+  if (!s?.google_access_token) throw new Error('Company user not connected to Gmail');
+  const oauth2Client = getOAuth2Client();
+  oauth2Client.setCredentials({
+    access_token: s.google_access_token,
+    refresh_token: s.google_refresh_token,
+    expiry_date: s.google_token_expiry ? new Date(s.google_token_expiry).getTime() : null,
+  });
+  if (s.google_token_expiry && new Date(s.google_token_expiry) < new Date()) {
+    if (!s.google_refresh_token) throw new Error('Token expired. Reconnect Google');
+    const { credentials } = await oauth2Client.refreshAccessToken();
+    oauth2Client.setCredentials(credentials);
+    await pool.query('UPDATE company_users SET google_access_token = $1, google_token_expiry = $2, updated_at = NOW() WHERE id = $3', [
+      credentials.access_token,
+      credentials.expiry_date ? new Date(credentials.expiry_date) : null,
+      company_user_id,
+    ]);
+  }
+  return oauth2Client;
+}
+
+async function sendCompanyGmailRaw(company_user_id, toCsv, ccCsv, bccCsv, subject, bodyText, attachments = []) {
+  const oauth2Client = await getFreshOAuthClientForCompanyUser(company_user_id);
+  const gmail = google.gmail({ version: 'v1', auth: oauth2Client });
+  const oauth2 = google.oauth2({ version: 'v2', auth: oauth2Client });
+  const userInfo = await oauth2.userinfo.get();
+  const senderEmail = userInfo.data.email;
+  const boundary = '----=_Part_' + Date.now();
+  const headers = [
+    `From: ${senderEmail}`,
+    `To: ${toCsv}`,
+    ...(ccCsv ? [`Cc: ${ccCsv}`] : []),
+    ...(bccCsv ? [`Bcc: ${bccCsv}`] : []),
+    `Subject: ${subject}`,
+    'MIME-Version: 1.0',
+  ];
+  let lines = [];
+  if (attachments.length === 0) {
+    lines = [...headers, 'Content-Type: text/plain; charset=UTF-8', '', bodyText];
+  } else {
+    lines = [...headers, `Content-Type: multipart/mixed; boundary="${boundary}"`, '', `--${boundary}`, 'Content-Type: text/plain; charset=UTF-8', '', bodyText, '', `--${boundary}`];
+    for (let i = 0; i < attachments.length; i++) {
+      const a = attachments[i];
+      lines.push(
+        `Content-Type: ${a.mimeType}; name="${a.filename}"`,
+        'Content-Transfer-Encoding: base64',
+        `Content-Disposition: attachment; filename="${a.filename}"`,
+        '',
+        (a.contentBuffer instanceof Buffer ? a.contentBuffer : Buffer.from(a.contentBuffer)).toString('base64'),
+        i === attachments.length - 1 ? `--${boundary}--` : `--${boundary}`
+      );
+    }
+  }
+  const message = lines.join('\r\n');
+  const encoded = Buffer.from(message).toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+  await gmail.users.messages.send({ userId: 'me', requestBody: { raw: encoded } });
+}
+
+async function sendInviteEmail(to, link, companyName, companyId, actorCompanyUserId) {
+  const cfg = (await pool.query('SELECT email_method, smtp_host, smtp_port, smtp_secure, smtp_user, smtp_pass FROM companies WHERE id = $1', [companyId])).rows[0] || {};
+  const subject = `Invitasjon til ${companyName} • Smart Timing`;
+  const text = `Du er invitert til å bli med i ${companyName} i Smart Timing. Klikk for å godta invitasjonen: ${link}\n\nLenken utløper om 7 dager.`;
+  if (cfg.email_method === 'gmail') {
+    await sendCompanyGmailRaw(actorCompanyUserId, to, undefined, undefined, subject, text, []);
+    return;
+  }
+  const provider = cfg.smtp_host ? { host: cfg.smtp_host, port: Number(cfg.smtp_port || 587), secure: Boolean(cfg.smtp_secure) } : (process.env.SMTP_HOST ? {
     host: process.env.SMTP_HOST,
     port: Number(process.env.SMTP_PORT || 587),
     secure: String(process.env.SMTP_SECURE || "false").toLowerCase() === "true",
-  } : guessSmtpByEmail(to);
-  const authUser = process.env.SMTP_USER || process.env.EMAIL_FROM || 'noreply@smarttiming.no';
-  const authPass = process.env.SMTP_PASS || process.env.SMTP_APP_PASSWORD;
+  } : guessSmtpByEmail(to));
+  const authUser = cfg.smtp_user || process.env.SMTP_USER || process.env.EMAIL_FROM || 'noreply@smarttiming.no';
+  const authPass = cfg.smtp_pass || process.env.SMTP_PASS || process.env.SMTP_APP_PASSWORD;
   const transport = nodemailer.createTransport({
     ...provider,
     auth: authPass ? { user: authUser, pass: authPass } : undefined,
@@ -3433,8 +3908,8 @@ async function sendInviteEmail(to, link, companyName) {
   await transport.sendMail({
     from: fromAddr,
     to,
-    subject: `Invitasjon til ${companyName} • Smart Timing`,
-    text: `Du er invitert til å bli med i ${companyName} i Smart Timing. Klikk for å godta invitasjonen: ${link}\n\nLenken utløper om 7 dager.`,
+    subject,
+    text,
   });
 }
 
@@ -3444,9 +3919,8 @@ app.post('/api/company/invites', authenticateCompany, requireCompanyRole('admin'
     if (!invited_email) return res.status(400).json({ error: 'invited_email is required' });
     const invite = (await pool.query(`INSERT INTO company_invites (company_id, invited_email, role, invited_by) VALUES ($1, $2, $3, $4) RETURNING *`, [req.companyUser.company_id, invited_email.toLowerCase(), role, req.companyUser.user_id])).rows[0];
     const company = (await pool.query('SELECT name FROM companies WHERE id = $1', [req.companyUser.company_id])).rows[0];
-    const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
     const link = `${process.env.BACKEND_URL || 'http://localhost:4000'}/api/company/invites/accept?token=${encodeURIComponent(invite.token)}`;
-    await sendInviteEmail(invited_email, link, company?.name || 'Smart Timing');
+    await sendInviteEmail(invited_email, link, company?.name || 'Smart Timing', req.companyUser.company_id, req.companyUser.user_id);
     await logCompanyAction(req.companyUser.company_id, req.companyUser.user_id, 'invite_created', 'company_invite', String(invite.id), { invited_email, role }, req, null, invite);
     res.json(invite);
   } catch (e) { res.status(500).json({ error: String(e) }); }
@@ -3459,7 +3933,7 @@ app.post('/api/company/invites/:id/resend', authenticateCompany, requireCompanyR
     if (inv.used_at) return res.status(400).json({ error: 'Invite already used' });
     const company = (await pool.query('SELECT name FROM companies WHERE id = $1', [req.companyUser.company_id])).rows[0];
     const link = `${process.env.BACKEND_URL || 'http://localhost:4000'}/api/company/invites/accept?token=${encodeURIComponent(inv.token)}`;
-    await sendInviteEmail(inv.invited_email, link, company?.name || 'Smart Timing');
+    await sendInviteEmail(inv.invited_email, link, company?.name || 'Smart Timing', req.companyUser.company_id, req.companyUser.user_id);
     await logCompanyAction(req.companyUser.company_id, req.companyUser.user_id, 'invite_resent', 'company_invite', String(inv.id), null, req, inv, inv);
     res.json({ ok: true });
   } catch (e) { res.status(500).json({ error: String(e) }); }
