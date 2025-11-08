@@ -43,8 +43,21 @@ function CmsTranslationsContent() {
       <Typography variant="h4" gutterBottom>{t('admin.cms.translations.title', 'CMS Translations')}</Typography>
 
       <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 2 }}>
-        <Button variant="contained" onClick={save}>{t('common.save_all', 'Save All')}</Button>
-        <Button variant="outlined" onClick={load}>{t('common.reload', 'Reload')}</Button>
+        <Box sx={{ display: 'flex', gap: 1 }}>
+          <Button variant="contained" onClick={save}>{t('common.save_all', 'Save All')}</Button>
+          <Button variant="outlined" onClick={load}>{t('common.reload', 'Reload')}</Button>
+          <Button variant="outlined" onClick={async () => {
+            try {
+              const res = await fetch('/i18n/new_translations.json', { cache: 'no-store' });
+              if (!res.ok) throw new Error('Failed to fetch new_translations.json');
+              const extra = await res.json();
+              setTranslations((prev: any) => ({ ...prev, ...extra }));
+              enqueueSnackbar('Translations imported (not saved yet)', { variant: 'success' });
+            } catch (e: any) {
+              enqueueSnackbar(e?.message || 'Import failed', { variant: 'error' });
+            }
+          }}>Import new</Button>
+        </Box>
       </Box>
 
       <table style={{ width: '100%', borderCollapse: 'collapse' }}>
