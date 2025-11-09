@@ -1051,7 +1051,7 @@ async function initTables(){
       -- Privacy guidelines bullets/text
       ('reports.important','reports','Viktig','Important'),
       ('reports.no_personal_data','reports','Rapporter skal ikke inneholde personopplysninger.','Reports must not contain personal data.'),
-      ('reports.no_names','reports','Ikke bruk navn på klienter','Do not use clients\' names'),
+      ('reports.no_names','reports','Ikke bruk navn på klienter','Do not use clients'' names'),
       ('reports.use_generic_terms','reports','Bruk heller generelle betegnelser: "Gutten", "Jenta", "Brukeren", "Deltakeren"','Use generic terms instead: "the boy", "the girl", "the user", "the participant"'),
       ('reports.avoid_identifying_details','reports','Unngå detaljer som kan identifisere personer (alder, adresse, spesifikke situasjoner)','Avoid details that can identify individuals (age, address, specific situations)'),
       ('reports.focus_on_activities_development','reports','Fokuser på aktiviteter og utvikling, ikke identitet','Focus on activities and development, not identity'),
