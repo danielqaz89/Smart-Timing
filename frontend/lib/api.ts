@@ -196,6 +196,7 @@ export async function generateMonthlyReport(opts: {
 }
 
 // ===== USER SETTINGS =====
+// Updated: 2025-01-09T01:00:00Z
 export type UserSettings = {
   id?: number;
   user_id?: string;
