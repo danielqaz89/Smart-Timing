@@ -348,6 +348,12 @@ async function initTables(){
       updated_at TIMESTAMP DEFAULT NOW()
     );
     
+
+    -- Add columns if they don't exist (for schema migration)
+    ALTER TABLE cms_translations ADD COLUMN IF NOT EXISTS no TEXT;
+    ALTER TABLE cms_translations ADD COLUMN IF NOT EXISTS en TEXT;
+    ALTER TABLE cms_translations ADD COLUMN IF NOT EXISTS category TEXT NOT NULL DEFAULT 'general';
+    
     -- CMS Media Library table (for uploaded files)
     CREATE TABLE IF NOT EXISTS cms_media (
       id SERIAL PRIMARY KEY,
