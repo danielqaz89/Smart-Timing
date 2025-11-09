@@ -31,6 +31,16 @@ import {
   DialogTitle,
   DialogContent,
   Switch,
+  Checkbox,
+  Skeleton,
+  Tooltip,
+  Collapse,
+  useMediaQuery,
+  useTheme,
+  Accordion,
+  AccordionSummary,
+  AccordionDetails,
+  Fab,
 } from "@mui/material";
 import { useSnackbar } from "notistack";
 import SettingsDrawer from "../components/SettingsDrawer";
@@ -39,12 +49,21 @@ import MobileBottomNav from "../components/MobileBottomNav";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import SettingsIcon from "@mui/icons-material/Settings";
+import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
+import ExpandLessIcon from "@mui/icons-material/ExpandLess";
 import CircularProgress from "@mui/material/CircularProgress";
 import DeleteIcon from "@mui/icons-material/Delete";
 import EditIcon from "@mui/icons-material/Edit";
 import SaveIcon from "@mui/icons-material/Save";
 import CloseIcon from "@mui/icons-material/Close";
 import RestoreIcon from "@mui/icons-material/Restore";
+import ChevronLeftIcon from "@mui/icons-material/ChevronLeft";
+import ChevronRightIcon from "@mui/icons-material/ChevronRight";
+import TodayIcon from "@mui/icons-material/Today";
+import StopIcon from "@mui/icons-material/Stop";
+import TimerIcon from "@mui/icons-material/Timer";
+import CheckCircleIcon from "@mui/icons-material/CheckCircle";
+import { keyframes } from "@mui/material/styles";
 import dayjs from "dayjs";
 import { API_BASE, createLog, deleteLog, fetchLogs, createLogsBulk, webhookTestRelay, deleteLogsMonth, deleteLogsAll, updateLog, sendTimesheet, sendTimesheetViaGmail, getGoogleAuthStatus, generateMonthlyReport, type LogRow, archiveLog, unarchiveLog, archiveMonth } from "../lib/api";
 import { exportToPDF } from "../lib/pdfExport";
@@ -54,6 +73,8 @@ import Brightness7Icon from "@mui/icons-material/Brightness7";
 import QuickStampFAB from "../components/QuickStampFAB";
 import dynamic from 'next/dynamic';
 const TemplateManager = dynamic(() => import('../components/TemplateManager'), { ssr: false });
+const HoursBarChart = dynamic(() => import('../components/HoursBarChart'), { ssr: false });
+const CalendarHeatmap = dynamic(() => import('../components/CalendarHeatmap'), { ssr: false });
 import { useTranslations } from "../contexts/TranslationsContext";
 
 // Locale-safe helpers for Timesats input (Norwegian)
@@ -83,6 +104,20 @@ const safeNumber = (v: any, fallback = 0) => {
 };
 const nokFmt = new Intl.NumberFormat('no-NO', { style: 'currency', currency: 'NOK', maximumFractionDigits: 0 });
 const formatCurrency = (v: number) => nokFmt.format(safeNumber(v, 0));
+
+// Pulse animation for active stamp
+const pulse = keyframes`
+  0% { box-shadow: 0 0 0 0 rgba(76, 175, 80, 0.7); }
+  50% { box-shadow: 0 0 0 10px rgba(76, 175, 80, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(76, 175, 80, 0); }
+`;
+
+// Success animation
+const successScale = keyframes`
+  0% { transform: scale(0); opacity: 0; }
+  50% { transform: scale(1.2); }
+  100% { transform: scale(1); opacity: 1; }
+`;
 
 // Helper to format YYYYMM as "Month YYYY" in Norwegian
 function formatMonthLabel(yyyymm: string): string {
@@ -1045,6 +1080,13 @@ export default function Home() {
     | { type: "delete"; row: LogRow }
     | { type: "update"; id: string; prev: Partial<LogRow & { start: string; end: string; breakHours: number }> };
   const [undo, setUndo] = useState<UndoAction | null>(null);
+  
+  // Auto-clear undo after 10 seconds
+  useEffect(() => {
+    if (!undo) return;
+    const timeout = setTimeout(() => setUndo(null), 10000);
+    return () => clearTimeout(timeout);
+  }, [undo]);
   async function handleUndo() {
     if (!undo) return;
     if (undo.type === "delete") {
@@ -1545,8 +1587,23 @@ export default function Home() {
   // Show loading state while checking project info to prevent flicker
   if (projectLoading) {
     return (
-      <Container maxWidth="lg" sx={{ py: 3, display: 'flex', justifyContent: 'center', alignItems: 'center', minHeight: '100vh' }}>
-        <CircularProgress />
+      <Container maxWidth="lg" sx={{ py: 3 }}>
+        <Stack spacing={3}>
+          <Skeleton variant="text" width="40%" height={40} />
+          <Skeleton variant="rectangular" height={120} />
+          <Grid container spacing={2}>
+            <Grid item xs={12} md={4}>
+              <Skeleton variant="rectangular" height={400} />
+            </Grid>
+            <Grid item xs={12} md={4}>
+              <Skeleton variant="rectangular" height={400} />
+            </Grid>
+            <Grid item xs={12} md={4}>
+              <Skeleton variant="rectangular" height={400} />
+            </Grid>
+          </Grid>
+          <Skeleton variant="rectangular" height={500} />
+        </Stack>
       </Container>
     );
   }
@@ -1638,14 +1695,21 @@ export default function Home() {
         </Card>
       )}
 
-      <Grid container spacing={2}>
+      <Grid container spacing={{ xs: 3, sm: 2 }}>
         <Grid item xs={12} lg={4} ref={stemplingRef}>
           <Card>
             <CardHeader title={t('home.stamping', 'Stempling')} />
             <CardContent>
               <Stack spacing={2}>
                 {activeStamp && (
-                  <Box sx={{ p: 2, bgcolor: 'success.light', borderRadius: 1 }}>
+                  <Box sx={{ 
+                    p: 2, 
+                    bgcolor: 'success.light', 
+                    borderRadius: 1,
+                    animation: `${pulse} 2s infinite`,
+                    border: 2,
+                    borderColor: 'success.main'
+                  }}>
                     <Stack spacing={1}>
                       <Typography variant="caption" color="success.dark" fontWeight="bold">
                         {t('home.stamped_in', 'Stemplet inn')}: {activeStamp.start_time?.slice(0,5)} - {activeStamp.activity === 'Work' ? t('stats.work', 'Arbeid') : t('stats.meetings', 'Møte')}
@@ -1653,6 +1717,31 @@ export default function Home() {
                       <Typography variant="h4" color="success.dark" fontWeight="bold">
                         {elapsedTime}
                       </Typography>
+                      <Button
+                        variant="contained"
+                        color="error"
+                        onClick={async () => {
+                          const now = dayjs().format("HH:mm");
+                          await updateLog(activeStamp.id, {
+                            date: activeStamp.date,
+                            start: activeStamp.start_time?.slice(0,5) as any,
+                            end: now as any,
+                            breakHours: Number(activeStamp.break_hours || 0),
+                            activity: activeStamp.activity as any,
+                            title: activeStamp.title || null,
+                            project: activeStamp.project || null,
+                            place: activeStamp.place || null,
+                            notes: activeStamp.notes || null,
+                          });
+                          await mutate();
+                          showToast(t('home.stamped_out', 'Stemplet ut'));
+                        }}
+                        startIcon={<StopIcon />}
+                        fullWidth
+                        size="large"
+                      >
+                        {t('home.stamp_out', 'Stemple UT')} ({elapsedTime})
+                      </Button>
                     </Stack>
                   </Box>
                 )}
@@ -1673,29 +1762,56 @@ export default function Home() {
                 <TextField label={t('fields.notes_optional', 'Notater (valgfritt)')} value={quickNotes} onChange={(e) => setQuickNotes(e.target.value)} multiline minRows={2} fullWidth />
                 <Button 
                   variant="contained" 
-                  onClick={handleQuickStamp}
+                  onClick={async () => {
+                    await handleQuickStamp();
+                    // Success animation
+                    showToast(
+                      <Stack direction="row" spacing={1} alignItems="center">
+                        <CheckCircleIcon sx={{ animation: `${successScale} 0.3s ease-out` }} />
+                        <span>{t('home.stamped_in_success', 'Stemplet inn!')}</span>
+                      </Stack> as any,
+                      'success'
+                    );
+                  }}
                   size="large"
-                  sx={{ py: 1.5 }}
+                  sx={{ 
+                    py: 1.5,
+                    transition: 'transform 0.2s ease-in-out',
+                    '&:active': { transform: 'scale(0.95)' }
+                  }}
                   aria-label={t('aria.stamp_in', 'Stemple inn')}
                   title={t('tooltips.stamp_in', 'Stemple inn')}
                 >
                   {t('home.stamp_in', 'Stemple INN')}
                 </Button>
                 <Stack direction="row" spacing={1} flexWrap="wrap">
-                  {templates.map((t) => (
+                  {templates.map((template) => (
+                    <Tooltip 
+                      key={template.id}
+                      title={
+                        <Box>
+                          <Typography variant="caption" fontWeight="bold">{template.label}</Typography>
+                          <Typography variant="caption" display="block">Aktivitet: {template.activity === 'Work' ? t('stats.work', 'Arbeid') : t('stats.meetings', 'Møte')}</Typography>
+                          {template.title && <Typography variant="caption" display="block">Tittel: {template.title}</Typography>}
+                          {template.project && <Typography variant="caption" display="block">Prosjekt: {template.project}</Typography>}
+                          {template.place && <Typography variant="caption" display="block">Sted: {template.place}</Typography>}
+                        </Box>
+                      }
+                      arrow
+                    >
                     <Chip 
-                      key={t.id}
-                      label={t.label} 
+                      label={template.label} 
                       size="small" 
                       onClick={() => {
-                        setQuickActivity(t.activity);
-                        setQuickTitle(t.title || '');
-                        setQuickProject(t.project || '');
-                        setQuickPlace(t.place || '');
+                        setQuickActivity(template.activity);
+                        setQuickTitle(template.title || '');
+                        setQuickProject(template.project || '');
+                        setQuickPlace(template.place || '');
                       }}
                       clickable
-                      aria-label={`${t('aria.use_template', 'Bruk mal')}: ${t.label}`}
+                      aria-label={`${t('aria.use_template', 'Bruk mal')}: ${template.label}`}
                     />
+                    </Tooltip>
                   ))}
                 </Stack>
               </Stack>
@@ -1746,7 +1862,16 @@ export default function Home() {
                   </Select>
                 </FormControl>
                 <Stack direction="row" spacing={2}>
-                  <TextField type="time" label={t('fields.in', 'Inn')} InputLabelProps={{ shrink: true }} value={start} onChange={(e) => setStart(e.target.value)} fullWidth />
+                  <TextField 
+                    type="time" 
+                    label={t('fields.in', 'Inn')} 
+                    InputLabelProps={{ shrink: true }} 
+                    value={start} 
+                    onChange={(e) => setStart(e.target.value)} 
+                    fullWidth
+                    error={start !== "" && !/^([01]?[0-9]|2[0-3]):[0-5][0-9]$/.test(start)}
+                    helperText={start !== "" && !/^([01]?[0-9]|2[0-3]):[0-5][0-9]$/.test(start) ? t('helpers.invalid_time', 'Ugyldig klokkeslett') : ""}
+                  />
                   <TextField 
                     type="time" 
                     label={t('fields.out', 'Ut')} 
@@ -1754,8 +1879,14 @@ export default function Home() {
                     value={end} 
                     onChange={(e) => setEnd(e.target.value)} 
                     fullWidth 
-                    error={end < start && end !== "" && start !== ""}
-                    helperText={end < start && end !== "" && start !== "" ? t('helpers.out_after_in', 'Ut må være etter Inn') : ""}
+                    error={(end < start && end !== "" && start !== "") || (end !== "" && !/^([01]?[0-9]|2[0-3]):[0-5][0-9]$/.test(end))}
+                    helperText={
+                      end !== "" && !/^([01]?[0-9]|2[0-3]):[0-5][0-9]$/.test(end) 
+                        ? t('helpers.invalid_time', 'Ugyldig klokkeslett')
+                        : (end < start && end !== "" && start !== "") 
+                        ? t('helpers.out_after_in', 'Ut må være etter Inn') 
+                        : ""
+                    }
                   />
                 </Stack>
                 <TextField type="number" label={t('fields.break_hours', 'Pause (timer)')} value={breakHours} onChange={(e) => setBreakHours(Number(e.target.value))} fullWidth />
@@ -1774,9 +1905,21 @@ export default function Home() {
                 <TextField label={t('fields.notes', 'Notater')} value={manualNotes} onChange={(e) => setManualNotes(e.target.value)} multiline minRows={2} fullWidth />
                 <Button 
                   variant="contained" 
-                  onClick={handleAddManual}
+                  onClick={async () => {
+                    await handleAddManual();
+                    // Success animation trigger
+                    const btn = document.activeElement as HTMLButtonElement;
+                    if (btn) {
+                      btn.style.transform = 'scale(1.1)';
+                      setTimeout(() => { btn.style.transform = 'scale(1)'; }, 200);
+                    }
+                  }}
                   size="large"
-                  sx={{ py: 1.5 }}
+                  sx={{ 
+                    py: 1.5,
+                    transition: 'transform 0.2s ease-in-out'
+                  }}
+                  disabled={!start || !end || end < start}
                 >
                   {t('common.add', 'Legg til')}
                 </Button>
@@ -1787,18 +1930,57 @@ export default function Home() {
 
         <Grid item xs={12} lg={4} ref={statsRef}>
           <Card>
-            <CardHeader title={t('home.month_metrics', 'Månedsfilter og nøkkeltall')} />
+            <CardHeader 
+              title={t('home.month_metrics', 'Månedsfilter og nøkkeltall')} 
+              action={
+                <IconButton
+                  onClick={() => {
+                    const newState = !(settings?.stats_collapsed || false);
+                    updateSettings({ stats_collapsed: newState });
+                  }}
+                  size="small"
+                >
+                  {settings?.stats_collapsed ? <ExpandMoreIcon /> : <ExpandLessIcon />}
+                </IconButton>
+              }
+            />
+            <Collapse in={!settings?.stats_collapsed} timeout="auto" unmountOnExit>
             <CardContent>
               <Stack spacing={2}>
-                <Stack direction="row" spacing={1} alignItems="center">
-                  <Button size="small" onClick={() => { const v = dayjs(monthNav+"01").subtract(1, "month").format("YYYYMM"); updateSettings({month_nav: v}); setMonthInput(v); }}>{"<"}</Button>
-                  <TextField
-                    label={t('fields.month', 'Måned')}
-                    value={monthInput}
-                    onChange={(e) => setMonthInput(e.target.value.replace(/[^0-9]/g, '').slice(0,6))}
-                    onBlur={() => { if (monthInput.length === 6) updateSettings({month_nav: monthInput}); }}
-                  />
-                  <Button size="small" onClick={() => { const v = dayjs(monthNav+"01").add(1, "month").format("YYYYMM"); updateSettings({month_nav: v}); setMonthInput(v); }}>{">"}</Button>
+                <Stack direction="row" spacing={1} alignItems="center" justifyContent="space-between">
+                  <IconButton 
+                    size="small" 
+                    onClick={() => { const v = dayjs(monthNav+"01").subtract(1, "month").format("YYYYMM"); updateSettings({month_nav: v}); setMonthInput(v); }}
+                    title={t('tooltips.prev_month', 'Forrige måned')}
+                    aria-label={t('tooltips.prev_month', 'Forrige måned')}
+                  >
+                    <ChevronLeftIcon />
+                  </IconButton>
+                  <Typography variant="body1" fontWeight="medium" sx={{ flex: 1, textAlign: 'center' }}>
+                    {formatMonthLabel(monthNav)}
+                  </Typography>
+                  <IconButton 
+                    size="small" 
+                    onClick={() => { const v = dayjs(monthNav+"01").add(1, "month").format("YYYYMM"); updateSettings({month_nav: v}); setMonthInput(v); }}
+                    title={t('tooltips.next_month', 'Neste måned')}
+                    aria-label={t('tooltips.next_month', 'Neste måned')}
+                  >
+                    <ChevronRightIcon />
+                  </IconButton>
+                  <Button 
+                    size="small" 
+                    variant="outlined"
+                    startIcon={<TodayIcon />}
+                    onClick={() => { 
+                      const v = dayjs().format("YYYYMM"); 
+                      updateSettings({month_nav: v}); 
+                      setMonthInput(v);
+                      updateViewMode('month');
+                    }}
+                    title={t('filters.this_month', 'Denne måneden')}
+                  >
+                    {t('common.today', 'I dag')}
+                  </Button>
                 </Stack>
                 <Stack direction="row" spacing={1} flexWrap="wrap" alignItems="center">
                   <Chip 
@@ -1852,6 +2034,22 @@ export default function Home() {
                 <Divider />
                 <Typography variant="body2">{t('stats.total_hours_weekdays', 'Totale timer (man–fre)')}</Typography>
                 <Typography variant="h4">{totalHours.toFixed(2)}</Typography>
+                <Box sx={{ mt: 1 }}>
+                  <Stack direction="row" justifyContent="space-between" alignItems="center">
+                    <Typography variant="caption" color="text.secondary">
+                      {(() => {
+                        const workdaysInMonth = Array.from({ length: dayjs(monthNav + "01").daysInMonth() }, (_, i) => {
+                          const day = dayjs(monthNav + "01").date(i + 1);
+                          return day.day() !== 0 && day.day() !== 6;
+                        }).filter(Boolean).length;
+                        const loggedDays = new Set(logs.map(l => l.date)).size;
+                        return `${loggedDays} / ~${workdaysInMonth} ${t('stats.workdays_logged', 'arbeidsdager loggført')}`;
+                      })()}
+                    </Typography>
+                  </Stack>
+                </Box>
+                <HoursBarChart logs={logs} monthNav={monthNav} paidBreak={paidBreakLocal} />
+                <CalendarHeatmap logs={logs} monthNav={monthNav} paidBreak={paidBreakLocal} />
                 <Stack direction="row" spacing={2}>
                   <Box>
                     <Typography variant="body2">{t('stats.work', 'Arbeid')}</Typography>
@@ -1938,11 +2136,20 @@ export default function Home() {
                 </Stack>
               </Stack>
             </CardContent>
+            </Collapse>
           </Card>
         </Grid>
-      </Grid>
 
-      <Grid container spacing={2} sx={{ mt: 1 }}>
+      </Grid>
+      <Box sx={{ mt: 3 }}>
+        <Typography variant="h5" gutterBottom>{t('home.data_management', 'Dataadministrasjon')}</Typography>
+        <Accordion defaultExpanded={false}>
+          <AccordionSummary expandIcon={<ExpandMoreIcon />}>
+            <Typography variant="h6">{t('home.quick_actions', 'Hurtighandlinger')}</Typography>
+          </AccordionSummary>
+          <AccordionDetails>
+            <Grid container spacing={{ xs: 3, sm: 2 }}>
+              <Grid item xs={12}>
         <Grid item xs={12}>
           <LazyMount>
             <TemplateManager
@@ -1962,8 +2169,8 @@ export default function Home() {
               </CardContent>
             </Card>
           </LazyMount>
-        </Grid>
-        <Grid item xs={12}>
+              </Grid>
+              <Grid item xs={12}>
           <LazyMount>
             <Card>
               <CardHeader title={t('home.google_sheets_webhook', 'Google Sheets Webhook (toveis)')} />
@@ -1972,8 +2179,8 @@ export default function Home() {
               </CardContent>
             </Card>
           </LazyMount>
-        </Grid>
-        <Grid item xs={12}>
+              </Grid>
+              <Grid item xs={12}>
           <LazyMount>
             <Card>
               <CardHeader title={t('home.add_workdays_month', 'Legg inn hverdager for måned')} />
@@ -1982,8 +2189,18 @@ export default function Home() {
               </CardContent>
             </Card>
           </LazyMount>
-        </Grid>
-        <Grid item xs={12}>
+              </Grid>
+            </Grid>
+          </AccordionDetails>
+        </Accordion>
+
+        <Accordion defaultExpanded={false} sx={{ mt: 2 }}>
+          <AccordionSummary expandIcon={<ExpandMoreIcon />}>
+            <Typography variant="h6">{t('home.reports_export', 'Rapporter & Eksport')}</Typography>
+          </AccordionSummary>
+          <AccordionDetails>
+            <Grid container spacing={{ xs: 3, sm: 2 }}>
+              <Grid item xs={12}>
           <LazyMount>
             <Card>
               <CardHeader title={t('home.send_timesheet', 'Send inn timeliste')} />
@@ -2002,8 +2219,11 @@ export default function Home() {
               </CardContent>
             </Card>
           </LazyMount>
-        </Grid>
-      </Grid>
+              </Grid>
+            </Grid>
+          </AccordionDetails>
+        </Accordion>
+      </Box>
 
       <LazyMount>
         <Box mt={3} ref={logsRef}>
@@ -2060,7 +2280,8 @@ updateSettings({ show_archived: v }).catch(() => void 0);
             }
           />
           <CardContent>
-            <Stack direction="row" spacing={2} sx={{ mb: 2 }} alignItems="center">
+            <Box sx={{ position: 'sticky', top: 0, zIndex: 10, bgcolor: 'background.paper', pb: 2, borderBottom: 1, borderColor: 'divider' }}>
+            <Stack direction="row" spacing={2} alignItems="center">
               <TextField 
                 placeholder={t('home.search_placeholder', 'Søk i logger (tittel, prosjekt, sted, notater, aktivitet)...')}
                 value={searchQuery}
@@ -2075,6 +2296,26 @@ updateSettings({ show_archived: v }).catch(() => void 0);
                 </Stack>
               )}
             </Stack>
+            </Box>
+            {logs.length === 0 && !isLoading && (
+              <Box sx={{ textAlign: 'center', py: 8 }}>
+                <TimerIcon sx={{ fontSize: 80, color: 'text.disabled', mb: 2 }} />
+                <Typography variant="h6" color="text.secondary" gutterBottom>
+                  {t('logs.empty', 'Ingen loggføringer for denne måneden')}
+                </Typography>
+                <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>
+                  {t('logs.empty_hint', 'Kom i gang ved å stemple inn eller legge til en manuell loggføring')}
+                </Typography>
+                <Button 
+                  variant="contained" 
+                  onClick={() => manualRef.current?.scrollIntoView({ behavior: 'smooth' })}
+                  startIcon={<EditIcon />}
+                >
+                  {t('logs.add_first', 'Legg til første logg')}
+                </Button>
+              </Box>
+            )}
+            {logs.length > 0 && (
             <Box sx={{ height: 500, border: 1, borderColor: 'divider', borderRadius: 1 }}>
               <TableVirtuoso
                 data={logs}
@@ -2087,7 +2328,22 @@ updateSettings({ show_archived: v }).catch(() => void 0);
                 }}
                 fixedHeaderContent={() => (
                   <TableRow>
-                    {bulkMode && <TableCell padding="checkbox" sx={{ bgcolor: 'background.paper' }} />}
+                    {bulkMode && (
+                      <TableCell padding="checkbox" sx={{ bgcolor: 'background.paper' }}>
+                        <Checkbox
+                          indeterminate={selectedIds.size > 0 && selectedIds.size < logs.length}
+                          checked={logs.length > 0 && selectedIds.size === logs.length}
+                          onChange={(e) => {
+                            if (e.target.checked) {
+                              selectAll();
+                            } else {
+                              deselectAll();
+                            }
+                          }}
+                          size="small"
+                        />
+                      </TableCell>
+                    )}
                     <TableCell sx={{ bgcolor: 'background.paper' }}>{t('table.date', 'Dato')}</TableCell>
                     <TableCell sx={{ bgcolor: 'background.paper' }}>{t('table.in', 'Inn')}</TableCell>
                     <TableCell sx={{ bgcolor: 'background.paper' }}>{t('table.out', 'Ut')}</TableCell>
@@ -2239,7 +2495,17 @@ updateSettings({ show_archived: v }).catch(() => void 0);
                         <TableCell>{r.start_time?.slice(0, 5)}</TableCell>
                         <TableCell>{r.end_time?.slice(0, 5)}</TableCell>
                         <TableCell>{r.break_hours}</TableCell>
-                        <TableCell>{r.activity}</TableCell>
+                        <TableCell>
+                          <Chip 
+                            label={r.activity} 
+                            size="small"
+                            sx={{
+                              bgcolor: r.activity === 'Work' ? 'success.light' : 'info.light',
+                              color: r.activity === 'Work' ? 'success.dark' : 'info.dark',
+                              fontWeight: 'medium'
+                            }}
+                          />
+                        </TableCell>
                         <TableCell>{r.title}</TableCell>
                         <TableCell>{r.project}</TableCell>
                         <TableCell>{r.place}</TableCell>
@@ -2281,12 +2547,8 @@ updateSettings({ show_archived: v }).catch(() => void 0);
                   </>
                 )}
               />
-              {!isLoading && logs.length === 0 && (
-                <Box sx={{ p: 3, textAlign: 'center' }}>
-                  <Typography variant="body2" color="text.secondary">{t('home.no_rows_this_month', 'Ingen rader i denne måneden enda.')}</Typography>
-                </Box>
-              )}
             </Box>
+            )}
           </CardContent>
           </Card>
         </Box>
@@ -2298,6 +2560,23 @@ updateSettings({ show_archived: v }).catch(() => void 0);
         onQuickAction={handleMobileQuickAction}
         currentSection="home"
       />
+
+      {/* Persistent Undo FAB */}
+      {undo && (
+        <Fab
+          color="secondary"
+          sx={{
+            position: 'fixed',
+            bottom: { xs: 90, md: 24 },
+            right: 24,
+            animation: `${successScale} 0.3s ease-out`,
+          }}
+          onClick={handleUndo}
+          aria-label={t('common.undo', 'Angre')}
+        >
+          <RestoreIcon />
+        </Fab>
+      )}
 
       {/* Add bottom padding for mobile nav */}
       <Box sx={{ height: 70, display: { xs: 'block', md: 'none' } }} />

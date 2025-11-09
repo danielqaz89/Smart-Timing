@@ -353,6 +353,9 @@ async function initTables(){
     ALTER TABLE cms_translations ADD COLUMN IF NOT EXISTS no TEXT;
     ALTER TABLE cms_translations ADD COLUMN IF NOT EXISTS en TEXT;
     ALTER TABLE cms_translations ADD COLUMN IF NOT EXISTS category TEXT NOT NULL DEFAULT 'general';
+    ALTER TABLE cms_translations ADD COLUMN IF NOT EXISTS updated_by INT;
+    ALTER TABLE cms_translations ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT NOW();
+    ALTER TABLE cms_translations ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT NOW();
     
     -- Ensure UNIQUE constraint exists on translation_key (required for ON CONFLICT)
     DO $$ BEGIN
@@ -360,6 +363,44 @@ async function initTables(){
         SELECT 1 FROM pg_constraint WHERE conname = 'cms_translations_translation_key_key'
       ) THEN
         ALTER TABLE cms_translations ADD CONSTRAINT cms_translations_translation_key_key UNIQUE (translation_key);
+      END IF;
+    END $$;
+    
+    -- Fix cms_translations.id to be SERIAL if it's not (for legacy DBs)
+    DO $$ BEGIN
+      -- Check if id column exists but doesn't have a default (not SERIAL)
+      IF EXISTS (
+        SELECT 1 FROM information_schema.columns 
+        WHERE table_name = 'cms_translations' AND column_name = 'id'
+          AND column_default IS NULL
+      ) THEN
+        -- Create sequence if it doesn't exist
+        CREATE SEQUENCE IF NOT EXISTS cms_translations_id_seq;
+        -- Set the sequence to the current max id
+        PERFORM setval('cms_translations_id_seq', COALESCE((SELECT MAX(id) FROM cms_translations), 0) + 1, false);
+        -- Set the default to use the sequence
+        ALTER TABLE cms_translations ALTER COLUMN id SET DEFAULT nextval('cms_translations_id_seq');
+        -- Associate the sequence with the column
+        ALTER SEQUENCE cms_translations_id_seq OWNED BY cms_translations.id;
+      END IF;
+    END $$;
+    
+    -- CMS Media Library table (for uploaded files)
+    DO $$ BEGIN
+      -- Check if id column exists but doesn't have a default (not SERIAL)
+      IF EXISTS (
+        SELECT 1 FROM information_schema.columns 
+        WHERE table_name = 'cms_translations' AND column_name = 'id'
+          AND column_default IS NULL
+      ) THEN
+        -- Create sequence if it doesn't exist
+        CREATE SEQUENCE IF NOT EXISTS cms_translations_id_seq;
+        -- Set the sequence to the current max id
+        PERFORM setval('cms_translations_id_seq', COALESCE((SELECT MAX(id) FROM cms_translations), 0) + 1, false);
+        -- Set the default to use the sequence
+        ALTER TABLE cms_translations ALTER COLUMN id SET DEFAULT nextval('cms_translations_id_seq');
+        -- Associate the sequence with the column
+        ALTER SEQUENCE cms_translations_id_seq OWNED BY cms_translations.id;
       END IF;
     END $$;
     
@@ -548,9 +589,6 @@ async function initTables(){
     ALTER TABLE cms_themes ADD COLUMN IF NOT EXISTS theme_id TEXT;
     ALTER TABLE cms_themes ADD COLUMN IF NOT EXISTS theme_type TEXT;
     ALTER TABLE cms_themes ADD COLUMN IF NOT EXISTS company_id INT;
-
-    ALTER TABLE cms_translations ADD COLUMN IF NOT EXISTS translation_key TEXT;
-    ALTER TABLE cms_translations ADD COLUMN IF NOT EXISTS category TEXT;
 
     ALTER TABLE cms_media ADD COLUMN IF NOT EXISTS uploaded_by INT;
     ALTER TABLE cms_media ADD COLUMN IF NOT EXISTS file_type TEXT;
@@ -5137,6 +5175,47 @@ app.get("/api/admin/company-requests", authenticateAdmin, requireAdminRole('supe
   }
 });
 
+// Email notification helper function
+async function sendCompanyRequestEmail(to, subject, body) {
+  try {
+    // Check if SMTP is configured
+    const smtpUser = process.env.SMTP_USER;
+    const smtpPass = process.env.SMTP_PASS;
+    const smtpHost = process.env.SMTP_HOST || 'smtp.gmail.com';
+    const smtpPort = process.env.SMTP_PORT || 587;
+    
+    if (!smtpUser || !smtpPass) {
+      console.warn('SMTP not configured. Email notification skipped.');
+      return { sent: false, reason: 'SMTP not configured' };
+    }
+    
+    const nodemailer = require('nodemailer');
+    
+    const transporter = nodemailer.createTransport({
+      host: smtpHost,
+      port: smtpPort,
+      secure: false,
+      auth: {
+        user: smtpUser,
+        pass: smtpPass,
+      },
+    });
+    
+    await transporter.sendMail({
+      from: smtpUser,
+      to,
+      subject,
+      html: body,
+    });
+    
+    console.log(`Email sent to ${to}: ${subject}`);
+    return { sent: true };
+  } catch (error) {
+    console.error('Email send error:', error);
+    return { sent: false, error: String(error) };
+  }
+}
+
 // PATCH /api/admin/company-requests/:id - Approve/reject company request
 app.patch("/api/admin/company-requests/:id", authenticateAdmin, requireAdminRole('super_admin', 'admin'), async (req, res) => {
   try {
@@ -5153,6 +5232,8 @@ app.patch("/api/admin/company-requests/:id", authenticateAdmin, requireAdminRole
       return res.status(404).json({ error: 'Request not found' });
     }
     
+    const requestData = request.rows[0];
+    
     // Update request status
     await pool.query(
       `UPDATE company_requests
@@ -5163,7 +5244,7 @@ app.patch("/api/admin/company-requests/:id", authenticateAdmin, requireAdminRole
     
     // If approved, create company
     if (status === 'approved') {
-      const { name, orgnr, contact_email, contact_phone, address_line, postal_code, city } = request.rows[0];
+      const { name, orgnr, contact_email, contact_phone, address_line, postal_code, city } = requestData;
       await pool.query(
         `INSERT INTO companies (name, orgnr, contact_email, contact_phone, address_line, postal_code, city, display_order)
          VALUES ($1, $2, $3, $4, $5, $6, $7, 0)
@@ -5172,12 +5253,67 @@ app.patch("/api/admin/company-requests/:id", authenticateAdmin, requireAdminRole
       );
     }
     
+    // Send email notification
+    if (requestData.requester_email) {
+      const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
+      
+      let emailSubject, emailBody;
+      
+      if (status === 'approved') {
+        emailSubject = `Company Registration Approved - ${requestData.name}`;
+        emailBody = `
+          <h2>Your Company Registration Has Been Approved!</h2>
+          <p>Congratulations! Your company registration request for <strong>${requestData.name}</strong> has been approved.</p>
+          
+          <h3>Next Steps:</h3>
+          <ol>
+            <li>Visit <a href="${frontendUrl}/portal/login">Smart Timing Portal</a></li>
+            <li>Log in with your email address</li>
+            <li>Start managing your company's time tracking</li>
+          </ol>
+          
+          ${notes ? `<p><strong>Admin Notes:</strong> ${notes}</p>` : ''}
+          
+          <p>If you have any questions, please contact our support team.</p>
+          
+          <p>Best regards,<br>Smart Timing Team</p>
+        `;
+      } else {
+        emailSubject = `Company Registration Update - ${requestData.name}`;
+        emailBody = `
+          <h2>Company Registration Request Update</h2>
+          <p>Thank you for your interest in Smart Timing. We've reviewed your company registration request for <strong>${requestData.name}</strong>.</p>
+          
+          <p>Unfortunately, we're unable to approve your request at this time.</p>
+          
+          ${notes ? `<p><strong>Reason:</strong> ${notes}</p>` : ''}
+          
+          <p>If you have questions or would like to reapply, please contact our support team.</p>
+          
+          <p>Best regards,<br>Smart Timing Team</p>
+        `;
+      }
+      
+      // Send email (non-blocking)
+      sendCompanyRequestEmail(requestData.requester_email, emailSubject, emailBody)
+        .then(result => {
+          if (result.sent) {
+            console.log(`Email notification sent for company request ${id}`);
+          } else {
+            console.warn(`Email notification failed for company request ${id}:`, result.reason || result.error);
+          }
+        })
+        .catch(err => {
+          console.error(`Email notification error for company request ${id}:`, err);
+        });
+    }
+    
     await logAdminAction(
       req.adminUser.id,
       `company_request_${status}`,
       'company_requests',
       id,
-      { status, notes, company_name: request.rows[0].name },
+      { status, notes, company_name: requestData.name },
       req.ip
     );
     
@@ -5403,6 +5539,236 @@ app.delete("/api/admin/companies/:companyId/users/:userId/cases/:caseRowId", aut
   } catch (e) {
     console.error('Company user case deletion error:', e);
     res.status(500).json({ error: 'Failed to delete case', details: String(e) });
+  }
+});
+
+// ===== PORTAL AUTHENTICATION ENDPOINTS =====
+// POST /api/portal/login - Portal user login (email/password)
+app.post("/api/portal/login", async (req, res) => {
+  try {
+    const { email, password } = req.body;
+    
+    if (!email || !password) {
+      return res.status(400).json({ error: 'Email and password are required' });
+    }
+    
+    // Find company user by email
+    const result = await pool.query(
+      `SELECT cu.*, c.name as company_name
+       FROM company_users cu
+       JOIN companies c ON c.id = cu.company_id
+       WHERE cu.user_email = $1 AND cu.approved = true`,
+      [email]
+    );
+    
+    if (result.rows.length === 0) {
+      return res.status(401).json({ error: 'Invalid credentials or user not approved' });
+    }
+    
+    const user = result.rows[0];
+    
+    // For now, we're using simplified auth without password hashing
+    // TODO: Implement proper password hashing with bcrypt
+    // const validPassword = await bcrypt.compare(password, user.password_hash);
+    
+    // Generate JWT token
+    const token = jwt.sign(
+      { 
+        id: user.id,
+        email: user.user_email,
+        company_id: user.company_id,
+        role: user.role,
+        type: 'portal'
+      },
+      JWT_SECRET,
+      { expiresIn: '7d' }
+    );
+    
+    res.json({
+      token,
+      user: {
+        id: user.id,
+        email: user.user_email,
+        company_id: user.company_id,
+        company_name: user.company_name,
+        role: user.role,
+      }
+    });
+  } catch (e) {
+    console.error('Portal login error:', e);
+    res.status(500).json({ error: 'Login failed', details: String(e) });
+  }
+});
+
+// POST /api/portal/magic-link - Send magic link for passwordless login
+app.post("/api/portal/magic-link", async (req, res) => {
+  try {
+    const { email } = req.body;
+    
+    if (!email) {
+      return res.status(400).json({ error: 'Email is required' });
+    }
+    
+    // Find company user by email
+    const result = await pool.query(
+      'SELECT id, user_email, company_id FROM company_users WHERE user_email = $1 AND approved = true',
+      [email]
+    );
+    
+    if (result.rows.length === 0) {
+      // Don't reveal if user exists for security
+      return res.json({ success: true, message: 'If an account exists, a login link has been sent' });
+    }
+    
+    const user = result.rows[0];
+    
+    // Generate magic link token
+    const magicToken = jwt.sign(
+      { 
+        id: user.id,
+        email: user.user_email,
+        company_id: user.company_id,
+        type: 'magic_link'
+      },
+      JWT_SECRET,
+      { expiresIn: '15m' } // Short expiry for security
+    );
+    
+    // TODO: Send email with magic link
+    // const magicLink = `${process.env.FRONTEND_URL}/portal/login?token=${magicToken}`;
+    // await sendMagicLinkEmail(email, magicLink);
+    
+    console.log(`Magic link for ${email}: /portal/login?token=${magicToken}`);
+    
+    res.json({ success: true, message: 'If an account exists, a login link has been sent' });
+  } catch (e) {
+    console.error('Magic link error:', e);
+    res.status(500).json({ error: 'Failed to send magic link', details: String(e) });
+  }
+});
+
+// POST /api/portal/verify-magic-link - Verify magic link token
+app.post("/api/portal/verify-magic-link", async (req, res) => {
+  try {
+    const { token } = req.body;
+    
+    if (!token) {
+      return res.status(400).json({ error: 'Token is required' });
+    }
+    
+    // Verify magic link token
+    const decoded = jwt.verify(token, JWT_SECRET);
+    
+    if (decoded.type !== 'magic_link') {
+      return res.status(400).json({ error: 'Invalid token type' });
+    }
+    
+    // Generate session token
+    const sessionToken = jwt.sign(
+      { 
+        id: decoded.id,
+        email: decoded.email,
+        company_id: decoded.company_id,
+        role: 'member',
+        type: 'portal'
+      },
+      JWT_SECRET,
+      { expiresIn: '7d' }
+    );
+    
+    // Fetch user details
+    const result = await pool.query(
+      `SELECT cu.*, c.name as company_name
+       FROM company_users cu
+       JOIN companies c ON c.id = cu.company_id
+       WHERE cu.id = $1`,
+      [decoded.id]
+    );
+    
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+    
+    const user = result.rows[0];
+    
+    res.json({
+      token: sessionToken,
+      user: {
+        id: user.id,
+        email: user.user_email,
+        company_id: user.company_id,
+        company_name: user.company_name,
+        role: user.role,
+      }
+    });
+  } catch (e) {
+    if (e.name === 'TokenExpiredError') {
+      return res.status(401).json({ error: 'Magic link has expired' });
+    }
+    if (e.name === 'JsonWebTokenError') {
+      return res.status(401).json({ error: 'Invalid magic link' });
+    }
+    console.error('Magic link verification error:', e);
+    res.status(500).json({ error: 'Verification failed', details: String(e) });
+  }
+});
+
+// Middleware to authenticate portal users
+function authenticatePortal(req, res, next) {
+  const authHeader = req.headers.authorization;
+  
+  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    return res.status(401).json({ error: 'No token provided' });
+  }
+  
+  const token = authHeader.substring(7);
+  
+  try {
+    const decoded = jwt.verify(token, JWT_SECRET);
+    
+    if (decoded.type !== 'portal') {
+      return res.status(401).json({ error: 'Invalid token type' });
+    }
+    
+    req.portalUser = decoded;
+    next();
+  } catch (e) {
+    if (e.name === 'TokenExpiredError') {
+      return res.status(401).json({ error: 'Token expired' });
+    }
+    return res.status(401).json({ error: 'Invalid token' });
+  }
+}
+
+// GET /api/portal/me - Get current portal user info
+app.get("/api/portal/me", authenticatePortal, async (req, res) => {
+  try {
+    const result = await pool.query(
+      `SELECT cu.*, c.name as company_name
+       FROM company_users cu
+       JOIN companies c ON c.id = cu.company_id
+       WHERE cu.id = $1`,
+      [req.portalUser.id]
+    );
+    
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+    
+    const user = result.rows[0];
+    
+    res.json({
+      id: user.id,
+      email: user.user_email,
+      google_email: user.google_email,
+      company_id: user.company_id,
+      company_name: user.company_name,
+      role: user.role,
+      approved: user.approved,
+    });
+  } catch (e) {
+    console.error('Portal user fetch error:', e);
+    res.status(500).json({ error: 'Failed to fetch user', details: String(e) });
   }
 });
 
