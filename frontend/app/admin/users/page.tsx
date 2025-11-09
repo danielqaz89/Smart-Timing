@@ -44,7 +44,7 @@ interface User {
   user_id: string;
   user_since: string;
   hourly_rate: number;
-  theme_mode: string;
+  theme_mode?: string;
   total_logs: number;
   total_projects: number;
   last_activity_date: string;
