@@ -4540,7 +4540,27 @@ app.put("/api/admin/settings/:key", authenticateAdmin, requireAdminRole('super_a
 });
 
 // ===== CMS ENDPOINTS =====
-// GET /api/admin/cms/pages/:pageId - Get page content
+// GET /api/cms/pages/public/:pageId - Get published page content (public, no auth)
+app.get("/api/cms/pages/public/:pageId", async (req, res) => {
+  try {
+    const { pageId } = req.params;
+    const result = await pool.query(
+      'SELECT * FROM cms_pages WHERE page_id = $1 AND is_published = true',
+      [pageId]
+    );
+    
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Page not found' });
+    }
+    
+    res.json(result.rows[0]);
+  } catch (e) {
+    console.error('Public CMS page fetch error:', e);
+    res.status(500).json({ error: 'Failed to fetch page', details: String(e) });
+  }
+});
+
+// GET /api/admin/cms/pages/:pageId - Get page content (admin)
 app.get("/api/admin/cms/pages/:pageId", authenticateAdmin, requireAdminRole('super_admin', 'admin'), async (req, res) => {
   try {
     const { pageId } = req.params;
