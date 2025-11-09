@@ -354,6 +354,15 @@ async function initTables(){
     ALTER TABLE cms_translations ADD COLUMN IF NOT EXISTS en TEXT;
     ALTER TABLE cms_translations ADD COLUMN IF NOT EXISTS category TEXT NOT NULL DEFAULT 'general';
     
+    -- Ensure UNIQUE constraint exists on translation_key (required for ON CONFLICT)
+    DO $$ BEGIN
+      IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint WHERE conname = 'cms_translations_translation_key_key'
+      ) THEN
+        ALTER TABLE cms_translations ADD CONSTRAINT cms_translations_translation_key_key UNIQUE (translation_key);
+      END IF;
+    END $$;
+    
     -- CMS Media Library table (for uploaded files)
     CREATE TABLE IF NOT EXISTS cms_media (
       id SERIAL PRIMARY KEY,
