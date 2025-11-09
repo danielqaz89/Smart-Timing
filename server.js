@@ -1268,7 +1268,41 @@ async function initTables(){
       ('smtp.help.ask_it','portal','Hvis dere ikke har SMTP-verdiene, spør IT-avdelingen eller e-postleverandøren. Be om følgende:','If you don’t have SMTP values, ask your IT department or email provider. Ask for:'),
       ('smtp.help.providers','portal','Typiske leverandører','Typical providers'),
       ('smtp.help.tip','portal','Tips: Bruk alltid app-spesifikke passord. Del aldri hovedpassord. Dere kan også hoppe over nå og konfigurere senere.','Tip: Always use app-specific passwords. Never share your main password. You can also skip now and configure later.'),
-      ('smtp.help.alt_gmail','portal','Alternativ: Velg “Gmail” som leverandør og klikk “Koble til Google”.','Alternative: Choose “Gmail” as provider and click “Connect Google”.')
+      ('smtp.help.alt_gmail','portal','Alternativ: Velg "Gmail" som leverandør og klikk "Koble til Google".','Alternative: Choose "Gmail" as provider and click "Connect Google".')
+    ON CONFLICT (translation_key) DO NOTHING
+  `);
+
+  // Landing page translations
+  await pool.query(`
+    INSERT INTO cms_translations (translation_key, category, no, en) VALUES
+      -- Hero section
+      ('landing.hero.title','landing','Smart Timing','Smart Timing'),
+      ('landing.hero.subtitle','landing','Moderne tidsregistrering for miljøarbeidere og konsulenter','Modern time tracking for social workers and consultants'),
+      ('landing.hero.cta_primary','landing','Kom i gang','Get Started'),
+      ('landing.hero.cta_secondary','landing','Bedriftsportal','Company Portal'),
+      -- Features section
+      ('landing.features.title','landing','Alt du trenger for tidsregistrering','Everything you need for time tracking'),
+      ('landing.features.time_tracking.title','landing','Enkel Tidsregistrering','Simple Time Tracking'),
+      ('landing.features.time_tracking.desc','landing','Logg arbeidstimer raskt med intuitivt grensesnitt. Start, stopp og pause med ett klikk.','Log work hours quickly with an intuitive interface. Start, stop and pause with one click.'),
+      ('landing.features.reports.title','landing','Automatiske Rapporter','Automatic Reports'),
+      ('landing.features.reports.desc','landing','Generer profesjonelle månedlige rapporter automatisk. Spar timer hver måned.','Generate professional monthly reports automatically. Save hours every month.'),
+      ('landing.features.portal.title','landing','Bedriftsportal','Company Portal'),
+      ('landing.features.portal.desc','landing','Bedrifter kan administrere ansatte, saker og se aggregerte timedata i egen portal.','Companies can manage employees, cases and view aggregated time data in their own portal.'),
+      ('landing.features.templates.title','landing','Hurtigmaler','Quick Templates'),
+      ('landing.features.templates.desc','landing','Lag maler for gjentakende oppgaver. Registrer en hel arbeidsdag på sekunder.','Create templates for recurring tasks. Log an entire workday in seconds.'),
+      ('landing.features.gdpr.title','landing','GDPR Kompatibel','GDPR Compatible'),
+      ('landing.features.gdpr.desc','landing','Full kontroll over dine data. Eksporter eller slett når som helst.','Full control over your data. Export or delete anytime.'),
+      ('landing.features.google.title','landing','Google Integrering','Google Integration'),
+      ('landing.features.google.desc','landing','Synkroniser med Google Sheets, send rapporter via Gmail, og sikkerhetskopier automatisk.','Sync with Google Sheets, send reports via Gmail, and backup automatically.'),
+      -- CTA section
+      ('landing.cta.title','landing','Klar til å spare tid?','Ready to save time?'),
+      ('landing.cta.subtitle','landing','Registrer deg gratis og start tidsregistrering på sekunder. Ingen kredittkort nødvendig.','Sign up for free and start time tracking in seconds. No credit card required.'),
+      ('landing.cta.primary','landing','Start gratis i dag','Start free today'),
+      -- Footer
+      ('landing.footer.rights','landing','Alle rettigheter reservert','All rights reserved'),
+      ('landing.footer.privacy','landing','Personvern','Privacy'),
+      ('landing.footer.terms','landing','Vilkår','Terms'),
+      ('landing.footer.gdpr','landing','GDPR','GDPR')
     ON CONFLICT (translation_key) DO NOTHING
   `);
 
