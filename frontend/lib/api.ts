@@ -212,6 +212,7 @@ export type UserSettings = {
   month_nav: string | null;
   show_archived?: boolean | null;
   language?: 'no' | 'en';
+  theme_mode?: 'light' | 'dark';
   created_at?: string;
   updated_at?: string;
 };
