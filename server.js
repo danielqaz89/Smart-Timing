@@ -358,6 +358,12 @@ async function initTables(){
     ALTER TABLE cms_translations ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT NOW();
     
     -- Ensure UNIQUE constraint exists on translation_key (required for ON CONFLICT)
+    -- First, deduplicate any existing rows (keep the latest)
+    DELETE FROM cms_translations
+    WHERE id NOT IN (
+      SELECT MAX(id) FROM cms_translations GROUP BY translation_key
+    );
+    
     DO $$ BEGIN
       IF NOT EXISTS (
         SELECT 1 FROM pg_constraint WHERE conname = 'cms_translations_translation_key_key'
