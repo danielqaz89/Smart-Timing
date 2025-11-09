@@ -1,9 +1,12 @@
 'use client';
 
 import { useEffect, useState, forwardRef } from 'react';
-import { Box, Typography, Paper, Table, TableBody, TableCell, TableHead, TableRow, IconButton, Chip, Dialog, DialogTitle, DialogContent, DialogActions, Button, TextField, Alert, AlertTitle, Stack } from '@mui/material';
-import { Check, Close, Visibility, Assignment, CheckCircle } from '@mui/icons-material';
+import { Box, Typography, Paper, Table, TableBody, TableCell, TableHead, TableRow, IconButton, Chip, Dialog, DialogTitle, DialogContent, DialogActions, Button, TextField, Alert, AlertTitle, Stack, Badge, Fab, Checkbox, Card, CardContent, Grid } from '@mui/material';
+import { Check, Close, Visibility, Assignment, CheckCircle, FilterList, Download, Comment, CheckCircleOutline, Cancel } from '@mui/icons-material';
 import { TableVirtuoso } from 'react-virtuoso';
+import dynamic from 'next/dynamic';
+
+const ReactQuill = dynamic(() => import('react-quill'), { ssr: false });
 import { CompanyProvider, useCompany } from '../../../contexts/CompanyContext';
 import PortalLayout from '../../../components/PortalLayout';
 import { useTranslations } from '../../../contexts/TranslationsContext';
@@ -13,6 +16,9 @@ import { TableSkeleton } from '../../../components/portal/SkeletonLoaders';
 import UndoFab from '../../../components/portal/UndoFab';
 import { usePortalUndo } from '../../../lib/hooks/usePortalUndo';
 import { getStatusColor, successScale } from '../../../lib/portalStyles';
+import FilterDrawer from '../../../components/portal/FilterDrawer';
+import jsPDF from 'jspdf';
+import autoTable from 'jspdf-autotable';
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE || 'http://localhost:4000';
 
@@ -26,6 +32,17 @@ function ReportsContent() {
   const [rejectionReason, setRejectionReason] = useState('');
   const [showRejectDialog, setShowRejectDialog] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [filterDrawerOpen, setFilterDrawerOpen] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<number[]>([]);
+  const [filters, setFilters] = useState({
+    statuses: [] as string[],
+    monthStart: '',
+    monthEnd: '',
+    userSearch: '',
+    caseSearch: ''
+  });
+  const [comments, setComments] = useState<{[key: number]: any[]}>({});
+  const [newComment, setNewComment] = useState('');
 
   useEffect(() => {
     loadReports();
@@ -66,12 +83,150 @@ function ReportsContent() {
       setRejectionReason('');
       setSelectedReport(null);
       loadReports();
+      enqueueSnackbar('Rapport avslått', { variant: 'success' });
     } catch (error) {
       console.error('Failed to reject:', error);
     }
   };
 
-  // Using getStatusColor from portalStyles instead
+  const handleBulkApprove = async () => {
+    if (selectedIds.length === 0) return;
+    if (!confirm(`Godkjenn ${selectedIds.length} rapporter?`)) return;
+    try {
+      await Promise.all(
+        selectedIds.map(id => 
+          fetchWithAuth(`${API_BASE}/api/company/case-reports/${id}/approve`, { method: 'POST' })
+        )
+      );
+      enqueueSnackbar(
+        <Stack direction="row" spacing={1} alignItems="center">
+          <CheckCircle sx={{ animation: `${successScale} 0.3s ease-out` }} />
+          <span>{selectedIds.length} rapporter godkjent</span>
+        </Stack> as any,
+        { variant: 'success' }
+      );
+      setSelectedIds([]);
+      loadReports();
+    } catch (error) {
+      console.error('Failed to bulk approve:', error);
+      enqueueSnackbar('Kunne ikke godkjenne rapporter', { variant: 'error' });
+    }
+  };
+
+  const handleBulkReject = async () => {
+    if (selectedIds.length === 0) return;
+    const reason = prompt(`Begrunnelse for avslag av ${selectedIds.length} rapporter:`);
+    if (!reason) return;
+    try {
+      await Promise.all(
+        selectedIds.map(id => 
+          fetchWithAuth(`${API_BASE}/api/company/case-reports/${id}/reject`, {
+            method: 'POST',
+            body: JSON.stringify({ rejection_reason: reason })
+          })
+        )
+      );
+      enqueueSnackbar(`${selectedIds.length} rapporter avslått`, { variant: 'success' });
+      setSelectedIds([]);
+      loadReports();
+    } catch (error) {
+      console.error('Failed to bulk reject:', error);
+    }
+  };
+
+  const exportToPDF = () => {
+    const doc = new jsPDF();
+    const reportsToExport = selectedIds.length > 0 
+      ? filteredReports.filter(r => selectedIds.includes(r.id))
+      : filteredReports;
+
+    doc.text('Saksrapporter', 14, 15);
+    doc.setFontSize(10);
+    doc.text(`Generert: ${new Date().toLocaleDateString('nb-NO')}`, 14, 22);
+
+    const tableData = reportsToExport.map(r => [
+      r.user_email || '',
+      r.case_id || '',
+      r.month || '',
+      r.status || '',
+      r.submitted_at ? new Date(r.submitted_at).toLocaleDateString() : '-'
+    ]);
+
+    autoTable(doc, {
+      startY: 30,
+      head: [['Bruker', 'Saksnr', 'Måned', 'Status', 'Innsendt']],
+      body: tableData,
+    });
+
+    doc.save(`rapporter_${new Date().toISOString().split('T')[0]}.pdf`);
+    enqueueSnackbar('PDF eksportert', { variant: 'success' });
+  };
+
+  const handleAddComment = async () => {
+    if (!selectedReport || !newComment.trim()) return;
+    try {
+      await fetchWithAuth(`${API_BASE}/api/company/case-reports/${selectedReport.id}/comments`, {
+        method: 'POST',
+        body: JSON.stringify({ comment: newComment }),
+      });
+      setNewComment('');
+      loadComments(selectedReport.id);
+      enqueueSnackbar('Kommentar lagt til', { variant: 'success' });
+    } catch (error) {
+      console.error('Failed to add comment:', error);
+    }
+  };
+
+  const loadComments = async (reportId: number) => {
+    try {
+      const res = await fetchWithAuth(`${API_BASE}/api/company/case-reports/${reportId}/comments`);
+      const data = await res.json();
+      setComments(prev => ({ ...prev, [reportId]: data.comments || [] }));
+    } catch (error) {
+      console.error('Failed to load comments:', error);
+    }
+  };
+
+  const filteredReports = reports.filter(report => {
+    // Status filter
+    if (filters.statuses.length > 0 && !filters.statuses.includes(report.status)) {
+      return false;
+    }
+    // Month range filter
+    if (filters.monthStart && report.month < filters.monthStart) return false;
+    if (filters.monthEnd && report.month > filters.monthEnd) return false;
+    // User search
+    if (filters.userSearch && !report.user_email?.toLowerCase().includes(filters.userSearch.toLowerCase())) {
+      return false;
+    }
+    // Case search
+    if (filters.caseSearch && !report.case_id?.toLowerCase().includes(filters.caseSearch.toLowerCase())) {
+      return false;
+    }
+    return true;
+  });
+
+  const activeFilterCount = 
+    filters.statuses.length + 
+    (filters.monthStart ? 1 : 0) + 
+    (filters.monthEnd ? 1 : 0) +
+    (filters.userSearch ? 1 : 0) +
+    (filters.caseSearch ? 1 : 0);
+
+  // Calculate analytics
+  const totalReports = reports.length;
+  const approvedReports = reports.filter(r => r.status === 'approved').length;
+  const submittedReports = reports.filter(r => r.status === 'submitted').length;
+  const rejectedReports = reports.filter(r => r.status === 'rejected').length;
+  const approvalRate = totalReports > 0 ? ((approvedReports / totalReports) * 100).toFixed(1) : '0.0';
+
+  const handleSelectAll = () => {
+    if (selectedIds.length === filteredReports.length) {
+      setSelectedIds([]);
+    } else {
+      setSelectedIds(filteredReports.filter(r => r.status === 'submitted').map(r => r.id));
+    }
+  };
 
   if (loading) {
     return (
@@ -102,11 +257,71 @@ function ReportsContent() {
 
   return (
     <Box>
-      <Typography variant="h4" gutterBottom>{t('portal.reports.title', 'Saksrapporter')}</Typography>
+      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
+        <Typography variant="h4">{t('portal.reports.title', 'Saksrapporter')}</Typography>
+        <Stack direction="row" spacing={1}>
+          <Button
+            startIcon={<Download />}
+            variant="outlined"
+            onClick={exportToPDF}
+            disabled={filteredReports.length === 0}
+          >
+            Eksporter PDF
+          </Button>
+          <Badge badgeContent={activeFilterCount} color="primary">
+            <Button
+              startIcon={<FilterList />}
+              variant="outlined"
+              onClick={() => setFilterDrawerOpen(true)}
+            >
+              Filtre
+            </Button>
+          </Badge>
+        </Stack>
+      </Box>
+
+      {/* Analytics Cards */}
+      <Grid container spacing={2} sx={{ mb: 2 }}>
+        <Grid item xs={12} sm={6} md={3}>
+          <Card>
+            <CardContent>
+              <Typography color="text.secondary" variant="body2">Totalt</Typography>
+              <Typography variant="h4">{totalReports}</Typography>
+            </CardContent>
+          </Card>
+        </Grid>
+        <Grid item xs={12} sm={6} md={3}>
+          <Card>
+            <CardContent>
+              <Typography color="text.secondary" variant="body2">Godkjenningsrate</Typography>
+              <Typography variant="h4">{approvalRate}%</Typography>
+              <Typography variant="caption" color="text.secondary">
+                {approvedReports}/{totalReports}
+              </Typography>
+            </CardContent>
+          </Card>
+        </Grid>
+        <Grid item xs={12} sm={6} md={3}>
+          <Card>
+            <CardContent>
+              <Typography color="text.secondary" variant="body2">Venter godkjenning</Typography>
+              <Typography variant="h4">{submittedReports}</Typography>
+            </CardContent>
+          </Card>
+        </Grid>
+        <Grid item xs={12} sm={6} md={3}>
+          <Card>
+            <CardContent>
+              <Typography color="text.secondary" variant="body2">Avslått</Typography>
+              <Typography variant="h4">{rejectedReports}</Typography>
+            </CardContent>
+          </Card>
+        </Grid>
+      </Grid>
       
       <Paper elevation={3} sx={{ height: 600 }}>
         <TableVirtuoso
-          data={reports}
+          data={filteredReports}
           components={{
             Table: (props) => <Table {...props} />,
             TableHead: TableHead,
@@ -115,6 +330,13 @@ function ReportsContent() {
           }}
           fixedHeaderContent={() => (
             <TableRow>
+              <TableCell padding="checkbox" sx={{ bgcolor: 'background.paper' }}>
+                <Checkbox
+                  checked={selectedIds.length === filteredReports.filter(r => r.status === 'submitted').length && selectedIds.length > 0}
+                  indeterminate={selectedIds.length > 0 && selectedIds.length < filteredReports.filter(r => r.status === 'submitted').length}
+                  onChange={handleSelectAll}
+                />
+              </TableCell>
               <TableCell sx={{ bgcolor: 'background.paper', fontWeight: 'bold' }}>{t('portal.reports.user', 'Bruker')}</TableCell>
               <TableCell sx={{ bgcolor: 'background.paper', fontWeight: 'bold' }}>{t('portal.reports.case', 'Saksnr')}</TableCell>
               <TableCell sx={{ bgcolor: 'background.paper', fontWeight: 'bold' }}>{t('portal.reports.month', 'Måned')}</TableCell>
@@ -125,6 +347,20 @@ function ReportsContent() {
           )}
           itemContent={(index, report) => (
             <>
+              <TableCell padding="checkbox">
+                {report.status === 'submitted' && (
+                  <Checkbox
+                    checked={selectedIds.includes(report.id)}
+                    onChange={() => {
+                      if (selectedIds.includes(report.id)) {
+                        setSelectedIds(selectedIds.filter(id => id !== report.id));
+                      } else {
+                        setSelectedIds([...selectedIds, report.id]);
+                      }
+                    }}
+                  />
+                )}
+              </TableCell>
               <TableCell>{report.user_email}</TableCell>
               <TableCell>{report.case_id}</TableCell>
               <TableCell>{report.month}</TableCell>
@@ -220,6 +456,43 @@ function ReportsContent() {
           <Button onClick={handleReject} variant="contained" color="error">{t('portal.reports.reject', 'Avslå')}</Button>
         </DialogActions>
       </Dialog>
+
+      {/* Filter Drawer */}
+      <FilterDrawer
+        open={filterDrawerOpen}
+        onClose={() => setFilterDrawerOpen(false)}
+        filters={filters}
+        onFiltersChange={setFilters}
+        onClear={() => setFilters({
+          statuses: [],
+          monthStart: '',
+          monthEnd: '',
+          userSearch: '',
+          caseSearch: ''
+        })}
+      />
+
+      {/* Batch Actions FAB */}
+      {selectedIds.length > 0 && (
+        <Box sx={{ position: 'fixed', bottom: 80, right: 16, display: 'flex', gap: 1 }}>
+          <Fab
+            variant="extended"
+            color="error"
+            onClick={handleBulkReject}
+          >
+            <Cancel sx={{ mr: 1 }} />
+            Avslå ({selectedIds.length})
+          </Fab>
+          <Fab
+            variant="extended"
+            color="success"
+            onClick={handleBulkApprove}
+          >
+            <CheckCircleOutline sx={{ mr: 1 }} />
+            Godkjenn ({selectedIds.length})
+          </Fab>
+        </Box>
+      )}
 
       <UndoFab undoAction={undoAction} onUndo={executeUndo} />
     </Box>

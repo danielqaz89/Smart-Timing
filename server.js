@@ -367,7 +367,10 @@ async function initTables(){
     END $$;
     
     -- Fix cms_translations.id to be SERIAL if it's not (for legacy DBs)
-    DO $$ BEGIN
+    DO $$ 
+    DECLARE
+      max_id INTEGER;
+    BEGIN
       -- Check if id column exists but doesn't have a default (not SERIAL)
       IF EXISTS (
         SELECT 1 FROM information_schema.columns 
@@ -376,27 +379,10 @@ async function initTables(){
       ) THEN
         -- Create sequence if it doesn't exist
         CREATE SEQUENCE IF NOT EXISTS cms_translations_id_seq;
-        -- Set the sequence to the current max id
-        PERFORM setval('cms_translations_id_seq', COALESCE((SELECT MAX(id) FROM cms_translations), 0) + 1, false);
-        -- Set the default to use the sequence
-        ALTER TABLE cms_translations ALTER COLUMN id SET DEFAULT nextval('cms_translations_id_seq');
-        -- Associate the sequence with the column
-        ALTER SEQUENCE cms_translations_id_seq OWNED BY cms_translations.id;
-      END IF;
-    END $$;
-    
-    -- CMS Media Library table (for uploaded files)
-    DO $$ BEGIN
-      -- Check if id column exists but doesn't have a default (not SERIAL)
-      IF EXISTS (
-        SELECT 1 FROM information_schema.columns 
-        WHERE table_name = 'cms_translations' AND column_name = 'id'
-          AND column_default IS NULL
-      ) THEN
-        -- Create sequence if it doesn't exist
-        CREATE SEQUENCE IF NOT EXISTS cms_translations_id_seq;
-        -- Set the sequence to the current max id
-        PERFORM setval('cms_translations_id_seq', COALESCE((SELECT MAX(id) FROM cms_translations), 0) + 1, false);
+        -- Get the max id or default to 0
+        SELECT COALESCE(MAX(id)::INTEGER, 0) INTO max_id FROM cms_translations;
+        -- Set the sequence to the current max id + 1
+        PERFORM setval('cms_translations_id_seq', max_id + 1, false);
         -- Set the default to use the sequence
         ALTER TABLE cms_translations ALTER COLUMN id SET DEFAULT nextval('cms_translations_id_seq');
         -- Associate the sequence with the column
