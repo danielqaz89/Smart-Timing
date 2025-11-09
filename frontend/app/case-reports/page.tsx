@@ -1,8 +1,8 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { Box, Container, Typography, Card, CardContent, Button, Grid, TextField, FormControl, InputLabel, Select, MenuItem, Chip, Alert } from '@mui/material';
-import { Add, Edit, Send } from '@mui/icons-material';
+import { Box, Container, Typography, Card, CardContent, Button, Grid, TextField, FormControl, InputLabel, Select, MenuItem, Chip, Alert, Dialog, DialogTitle, DialogContent, DialogActions, AlertTitle, Stack, Divider, Paper, IconButton } from '@mui/material';
+import { Add, Edit, Send, Close, InfoOutlined, WarningAmber } from '@mui/icons-material';
 import { CompanyProvider, useCompany } from '../../contexts/CompanyContext';
 import Link from 'next/link';
 import { useTranslations } from '../../contexts/TranslationsContext';
@@ -17,6 +17,8 @@ function CaseReportsContent() {
   const [cases, setCases] = useState<any[]>([]);
   const [reports, setReports] = useState<any[]>([]);
   const [editingReport, setEditingReport] = useState<any>(null);
+  const [feedbackDialogOpen, setFeedbackDialogOpen] = useState(false);
+  const [selectedFeedbackReport, setSelectedFeedbackReport] = useState<any>(null);
   const [formData, setFormData] = useState({
     user_cases_id: '',
     case_id: '',
@@ -134,6 +136,27 @@ function CaseReportsContent() {
     }
   };
 
+  const openFeedbackDialog = (report: any) => {
+    setSelectedFeedbackReport(report);
+    setFeedbackDialogOpen(true);
+  };
+
+  const closeFeedbackDialog = () => {
+    setFeedbackDialogOpen(false);
+    setSelectedFeedbackReport(null);
+  };
+
+  const formatDateTime = (dateStr: string) => {
+    if (!dateStr) return '';
+    return new Date(dateStr).toLocaleString('nb-NO', {
+      year: 'numeric',
+      month: 'long',
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+  };
+
   if (!user) {
     return (
       <Container maxWidth="md" sx={{ py: 4 }}>
@@ -166,24 +189,53 @@ function CaseReportsContent() {
                   <Chip label={t(`case_reports.status.${report.status}`, report.status)} color={getStatusColor(report.status)} size="small" />
                 </Box>
                 
+                {report.rejection_reason && (
+                  <Alert 
+                    severity="error" 
+                    icon={<WarningAmber />}
+                    sx={{ mt: 2, cursor: 'pointer' }}
+                    onClick={() => openFeedbackDialog(report)}
+                  >
+                    <AlertTitle sx={{ fontWeight: 600 }}>
+                      {t('case_reports.rejected_title', 'Rapporten ble avslått')}
+                    </AlertTitle>
+                    <Typography variant="body2" sx={{ mb: 1 }}>
+                      {report.rejection_reason}
+                    </Typography>
+                    <Typography variant="caption" color="text.secondary">
+                      {t('case_reports.rejected_by', 'Avslått av')} {report.rejected_by || 'admin'} • {formatDateTime(report.rejected_at)}
+                    </Typography>
+                    <Box sx={{ mt: 1 }}>
+                      <Typography variant="caption" sx={{ fontWeight: 600, color: 'error.main' }}>
+                        {t('case_reports.click_details', 'Klikk for å se detaljert tilbakemelding')} →
+                      </Typography>
+                    </Box>
+                  </Alert>
+                )}
+                
                 <Box sx={{ mt: 2, display: 'flex', gap: 1 }}>
                   {(report.status === 'draft' || report.status === 'rejected') && (
                     <>
-                      <Button size="small" startIcon={<Edit />} onClick={() => startEdit(report)}>
+                      <Button size="small" startIcon={<Edit />} onClick={() => startEdit(report)} variant="outlined">
                         {t('common.edit', 'Rediger')}
                       </Button>
-                      <Button size="small" startIcon={<Send />} onClick={() => handleSubmit(report.id)}>
+                      <Button size="small" startIcon={<Send />} onClick={() => handleSubmit(report.id)} variant="contained" color="primary">
                         {t('common.submit', 'Send inn')}
                       </Button>
                     </>
                   )}
+                  {report.rejection_reason && (
+                    <Button 
+                      size="small" 
+                      startIcon={<InfoOutlined />} 
+                      onClick={() => openFeedbackDialog(report)}
+                      variant="text"
+                      color="error"
+                    >
+                      {t('case_reports.view_feedback', 'Se tilbakemelding')}
+                    </Button>
+                  )}
                 </Box>
-                
-                {report.rejection_reason && (
-                  <Alert severity="error" sx={{ mt: 2 }}>
-                    {t('case_reports.rejected_prefix', 'Avslått:')} {report.rejection_reason}
-                  </Alert>
-                )}
               </CardContent>
             </Card>
           </Grid>
@@ -349,6 +401,163 @@ function CaseReportsContent() {
           </Box>
         </CardContent>
       </Card>
+
+      {/* Feedback Dialog */}
+      <Dialog 
+        open={feedbackDialogOpen} 
+        onClose={closeFeedbackDialog}
+        maxWidth="md"
+        fullWidth
+      >
+        <DialogTitle sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', pb: 1 }}>
+          <Box>
+            <Typography variant="h6">
+              {t('case_reports.feedback_title', 'Tilbakemelding på rapport')}
+            </Typography>
+            <Typography variant="caption" color="text.secondary">
+              {selectedFeedbackReport?.case_id} • {selectedFeedbackReport?.month}
+            </Typography>
+          </Box>
+          <IconButton onClick={closeFeedbackDialog} size="small">
+            <Close />
+          </IconButton>
+        </DialogTitle>
+        
+        <DialogContent dividers>
+          {selectedFeedbackReport && (
+            <Stack spacing={3}>
+              {/* Status Banner */}
+              <Alert severity="error" icon={<WarningAmber fontSize="large" />}>
+                <AlertTitle sx={{ fontSize: '1.1rem', fontWeight: 600 }}>
+                  {t('case_reports.report_rejected', 'Rapporten er avslått')}
+                </AlertTitle>
+                <Typography variant="body2" sx={{ mt: 1 }}>
+                  {t('case_reports.rejection_explanation', 'Din rapport har blitt gjennomgått og krever endringer før den kan godkjennes. Se detaljer nedenfor.')}
+                </Typography>
+              </Alert>
+
+              {/* Rejection Details */}
+              <Paper variant="outlined" sx={{ p: 2, bgcolor: 'error.50', borderColor: 'error.200' }}>
+                <Typography variant="subtitle2" color="error.main" sx={{ fontWeight: 600, mb: 1 }}>
+                  {t('case_reports.rejection_reason', 'Årsak til avslag')}
+                </Typography>
+                <Typography variant="body1" sx={{ whiteSpace: 'pre-wrap', lineHeight: 1.7 }}>
+                  {selectedFeedbackReport.rejection_reason}
+                </Typography>
+              </Paper>
+
+              {/* Metadata */}
+              <Box>
+                <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 0.5 }}>
+                  <strong>{t('case_reports.rejected_by', 'Avslått av')}:</strong> {selectedFeedbackReport.rejected_by || 'Administrator'}
+                </Typography>
+                <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
+                  <strong>{t('case_reports.rejected_date', 'Dato')}:</strong> {formatDateTime(selectedFeedbackReport.rejected_at)}
+                </Typography>
+              </Box>
+
+              <Divider />
+
+              {/* Action Items */}
+              <Box>
+                <Typography variant="subtitle2" sx={{ fontWeight: 600, mb: 2 }}>
+                  {t('case_reports.next_steps', 'Neste steg')}
+                </Typography>
+                <Stack spacing={1.5}>
+                  <Box sx={{ display: 'flex', gap: 1.5, alignItems: 'flex-start' }}>
+                    <Box sx={{ 
+                      minWidth: 24, 
+                      height: 24, 
+                      borderRadius: '50%', 
+                      bgcolor: 'primary.main', 
+                      color: 'white', 
+                      display: 'flex', 
+                      alignItems: 'center', 
+                      justifyContent: 'center',
+                      fontWeight: 600,
+                      fontSize: '0.875rem'
+                    }}>
+                      1
+                    </Box>
+                    <Typography variant="body2">
+                      {t('case_reports.step1', 'Les tilbakemeldingen nøye og noter hvilke deler som må endres')}
+                    </Typography>
+                  </Box>
+                  <Box sx={{ display: 'flex', gap: 1.5, alignItems: 'flex-start' }}>
+                    <Box sx={{ 
+                      minWidth: 24, 
+                      height: 24, 
+                      borderRadius: '50%', 
+                      bgcolor: 'primary.main', 
+                      color: 'white', 
+                      display: 'flex', 
+                      alignItems: 'center', 
+                      justifyContent: 'center',
+                      fontWeight: 600,
+                      fontSize: '0.875rem'
+                    }}>
+                      2
+                    </Box>
+                    <Typography variant="body2">
+                      {t('case_reports.step2', 'Klikk "Rediger" på rapporten for å gjøre endringer')}
+                    </Typography>
+                  </Box>
+                  <Box sx={{ display: 'flex', gap: 1.5, alignItems: 'flex-start' }}>
+                    <Box sx={{ 
+                      minWidth: 24, 
+                      height: 24, 
+                      borderRadius: '50%', 
+                      bgcolor: 'primary.main', 
+                      color: 'white', 
+                      display: 'flex', 
+                      alignItems: 'center', 
+                      justifyContent: 'center',
+                      fontWeight: 600,
+                      fontSize: '0.875rem'
+                    }}>
+                      3
+                    </Box>
+                    <Typography variant="body2">
+                      {t('case_reports.step3', 'Send inn rapporten på nytt når endringene er gjort')}
+                    </Typography>
+                  </Box>
+                </Stack>
+              </Box>
+
+              {/* Help Section */}
+              <Paper variant="outlined" sx={{ p: 2, bgcolor: 'info.50', borderColor: 'info.200' }}>
+                <Stack direction="row" spacing={1.5} alignItems="flex-start">
+                  <InfoOutlined color="info" />
+                  <Box>
+                    <Typography variant="subtitle2" sx={{ fontWeight: 600, mb: 0.5 }}>
+                      {t('case_reports.need_help', 'Trenger du hjelp?')}
+                    </Typography>
+                    <Typography variant="body2" color="text.secondary">
+                      {t('case_reports.help_text', 'Hvis du er usikker på hva som må endres, ta kontakt med din kontaktperson eller administrator.')}
+                    </Typography>
+                  </Box>
+                </Stack>
+              </Paper>
+            </Stack>
+          )}
+        </DialogContent>
+        
+        <DialogActions sx={{ p: 2, gap: 1 }}>
+          <Button onClick={closeFeedbackDialog}>
+            {t('common.close', 'Lukk')}
+          </Button>
+          <Button 
+            variant="contained" 
+            startIcon={<Edit />}
+            onClick={() => {
+              closeFeedbackDialog();
+              startEdit(selectedFeedbackReport);
+            }}
+          >
+            {t('case_reports.edit_now', 'Rediger nå')}
+          </Button>
+        </DialogActions>
+      </Dialog>
     </Container>
   );
 }
