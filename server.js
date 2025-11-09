@@ -370,17 +370,23 @@ async function initTables(){
     DO $$ 
     DECLARE
       max_id INTEGER;
+      col_type TEXT;
     BEGIN
-      -- Check if id column exists but doesn't have a default (not SERIAL)
-      IF EXISTS (
+      -- Get the current data type of the id column
+      SELECT data_type INTO col_type
+      FROM information_schema.columns 
+      WHERE table_name = 'cms_translations' AND column_name = 'id';
+      
+      -- Only try to fix if id column is already integer type but missing sequence
+      IF col_type IN ('integer', 'bigint', 'smallint') AND EXISTS (
         SELECT 1 FROM information_schema.columns 
         WHERE table_name = 'cms_translations' AND column_name = 'id'
           AND column_default IS NULL
       ) THEN
         -- Create sequence if it doesn't exist
         CREATE SEQUENCE IF NOT EXISTS cms_translations_id_seq;
-        -- Get the max id or default to 0
-        SELECT COALESCE(MAX(id)::INTEGER, 0) INTO max_id FROM cms_translations;
+        -- Get the max id or default to 0 (safe because we know it's integer type)
+        SELECT COALESCE(MAX(id), 0) INTO max_id FROM cms_translations;
         -- Set the sequence to the current max id + 1
         PERFORM setval('cms_translations_id_seq', max_id + 1, false);
         -- Set the default to use the sequence
@@ -388,6 +394,9 @@ async function initTables(){
         -- Associate the sequence with the column
         ALTER SEQUENCE cms_translations_id_seq OWNED BY cms_translations.id;
       END IF;
+      
+      -- If id is TEXT type, we can't convert it safely without data loss
+      -- Just log this case (no action taken to avoid breaking existing data)
     END $$;
     
     -- CMS Media Library table (for uploaded files)
