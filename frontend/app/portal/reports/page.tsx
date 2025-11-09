@@ -1,22 +1,31 @@
 'use client';
 
 import { useEffect, useState, forwardRef } from 'react';
-import { Box, Typography, Paper, Table, TableBody, TableCell, TableHead, TableRow, IconButton, Chip, Dialog, DialogTitle, DialogContent, DialogActions, Button, TextField } from '@mui/material';
-import { Check, Close, Visibility } from '@mui/icons-material';
+import { Box, Typography, Paper, Table, TableBody, TableCell, TableHead, TableRow, IconButton, Chip, Dialog, DialogTitle, DialogContent, DialogActions, Button, TextField, Alert, AlertTitle, Stack } from '@mui/material';
+import { Check, Close, Visibility, Assignment, CheckCircle } from '@mui/icons-material';
 import { TableVirtuoso } from 'react-virtuoso';
 import { CompanyProvider, useCompany } from '../../../contexts/CompanyContext';
 import PortalLayout from '../../../components/PortalLayout';
 import { useTranslations } from '../../../contexts/TranslationsContext';
+import { useSnackbar } from 'notistack';
+import EmptyState from '../../../components/portal/EmptyState';
+import { TableSkeleton } from '../../../components/portal/SkeletonLoaders';
+import UndoFab from '../../../components/portal/UndoFab';
+import { usePortalUndo } from '../../../lib/hooks/usePortalUndo';
+import { getStatusColor, successScale } from '../../../lib/portalStyles';
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE || 'http://localhost:4000';
 
 function ReportsContent() {
   const { t } = useTranslations();
   const { fetchWithAuth } = useCompany();
+  const { enqueueSnackbar } = useSnackbar();
+  const { undoAction, setUndo, executeUndo } = usePortalUndo();
   const [reports, setReports] = useState<any[]>([]);
   const [selectedReport, setSelectedReport] = useState<any>(null);
   const [rejectionReason, setRejectionReason] = useState('');
   const [showRejectDialog, setShowRejectDialog] = useState(false);
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     loadReports();
@@ -24,11 +33,15 @@ function ReportsContent() {
 
   const loadReports = async () => {
     try {
+      setLoading(true);
       const res = await fetchWithAuth(`${API_BASE}/api/company/case-reports`);
       const data = await res.json();
       setReports(data.reports || []);
     } catch (error) {
       console.error('Failed to load reports:', error);
+      enqueueSnackbar(t('portal.reports.load_failed', 'Kunne ikke laste rapporter'), { variant: 'error' });
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -58,14 +71,34 @@ function ReportsContent() {
     }
   };
 
-  const getStatusColor = (status: string) => {
-    switch (status) {
-      case 'approved': return 'success';
-      case 'submitted': return 'warning';
-      case 'rejected': return 'error';
-      default: return 'default';
-    }
-  };
+  // Using getStatusColor from portalStyles instead
+
+  if (loading) {
+    return (
+      <Box>
+        <Typography variant="h4" gutterBottom>{t('portal.reports.title', 'Saksrapporter')}</Typography>
+        <Paper elevation={3} sx={{ height: 600, overflow: 'hidden' }}>
+          <TableSkeleton rows={8} />
+        </Paper>
+      </Box>
+    );
+  }
+
+  if (!loading && reports.length === 0) {
+    return (
+      <Box>
+        <Typography variant="h4" gutterBottom>{t('portal.reports.title', 'Saksrapporter')}</Typography>
+        <Paper elevation={3}>
+          <EmptyState
+            icon={<Assignment />}
+            title={t('portal.reports.empty', 'Ingen rapporter ennå')}
+            description={t('portal.reports.empty_desc', 'Rapporter vil vises her når brukere sender inn saksrapporter.')}
+          />
+        </Paper>
+        <UndoFab undoAction={undoAction} onUndo={executeUndo} />
+      </Box>
+    );
+  }
 
   return (
     <Box>
@@ -123,6 +156,19 @@ function ReportsContent() {
       <Dialog open={!!selectedReport && !showRejectDialog} onClose={() => setSelectedReport(null)} maxWidth="md" fullWidth>
         <DialogTitle>{t('portal.reports.view_title', 'Rapport')} - {selectedReport?.case_id} ({selectedReport?.month})</DialogTitle>
         <DialogContent>
+          {/* Rejection Feedback Banner */}
+          {selectedReport?.status === 'rejected' && (
+            <Alert severity="error" sx={{ mb: 2 }}>
+              <AlertTitle>{t('portal.reports.rejected_title', 'Rapport avslått')}</AlertTitle>
+              <Typography variant="body2" sx={{ mb: 1 }}>
+                <strong>{t('portal.reports.reason', 'Begrunnelse')}:</strong> {selectedReport?.rejection_reason || t('portal.reports.no_reason', 'Ingen begrunnelse gitt')}
+              </Typography>
+              <Typography variant="caption" color="text.secondary" display="block">
+                {t('portal.reports.rejected_by', 'Avslått')} {selectedReport?.rejected_at ? new Date(selectedReport.rejected_at).toLocaleString() : ''}
+              </Typography>
+            </Alert>
+          )}
+          
           <Box sx={{ '& > *': { mb: 2 } }}>
             <Box>
               <Typography variant="subtitle2" color="text.secondary">{t('portal.reports.background', 'Bakgrunn')}</Typography>
@@ -174,6 +220,8 @@ function ReportsContent() {
           <Button onClick={handleReject} variant="contained" color="error">{t('portal.reports.reject', 'Avslå')}</Button>
         </DialogActions>
       </Dialog>
+
+      <UndoFab undoAction={undoAction} onUndo={executeUndo} />
     </Box>
   );
 }
