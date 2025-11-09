@@ -840,7 +840,7 @@ async function initTables(){
       ('fields.enable_webhook','fields','Aktiver webhook','Enable webhook'),
       ('fields.webhook_url','fields','Webhook URL','Webhook URL'),
       ('fields.google_sheets_url','fields','Google Sheets URL','Google Sheets URL'),
-      ('help.sheets_picker','help','Eller bruk \'Browse\' for å velge fra Google Drive','Or use \"Browse\" to pick from Google Drive'),
+      ('help.sheets_picker','help','Eller bruk \'Browse\' for å velge fra Google Drive','Or use ''Browse'' to pick from Google Drive'),
       ('help.webhook_sheets','help','Webhook sender data til eksterne systemer. Sheets-URL for toveis synk.','Webhook sends data to external systems. Sheets URL for two-way sync.'),
       ('settings.admin_system','settings','🔐 Admin og System','🔐 Admin & System'),
       ('settings.admin_panel','settings','Admin Panel','Admin Panel'),
