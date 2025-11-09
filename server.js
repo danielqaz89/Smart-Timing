@@ -1227,7 +1227,7 @@ async function initTables(){
       ('admin.users.status_all','admin','All','All'),
       ('admin.users.archived_badge','admin','Archived','Archived')
     ON CONFLICT (translation_key) DO NOTHING
-  `;
+  `);
 
   // Additional translations for portal email/SMTP help
   await pool.query(`
