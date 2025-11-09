@@ -213,6 +213,14 @@ export type UserSettings = {
   show_archived?: boolean | null;
   language?: 'no' | 'en';
   theme_mode?: 'light' | 'dark';
+  invoice_reminder_active?: boolean;
+  reminder_day?: number;
+  reminder_hour?: number;
+  reminder_timezone?: string;
+  reminder_recipients?: string;
+  reminder_attach_pdf?: boolean;
+  reminder_subject?: string;
+  reminder_message?: string;
   created_at?: string;
   updated_at?: string;
 };
