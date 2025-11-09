@@ -20,8 +20,9 @@ export default function ThemeRegistry({ children }: { children: ReactNode }) {
   // Load theme from database on mount
   useEffect(() => {
     fetchSettings('default').then(settings => {
-      if (settings?.theme_mode) {
-        setMode(settings.theme_mode as PaletteMode);
+      const theme = (settings as any)?.theme_mode;
+      if (theme) {
+        setMode(theme as PaletteMode);
       }
       setLoaded(true);
     }).catch(() => setLoaded(true));
@@ -33,7 +34,7 @@ export default function ThemeRegistry({ children }: { children: ReactNode }) {
     
     // Save to database
     try {
-      await updateSettings({ theme_mode: newMode }, 'default');
+      await updateSettings({ theme_mode: newMode } as any, 'default');
     } catch (e) {
       console.error('Failed to save theme mode:', e);
     }
