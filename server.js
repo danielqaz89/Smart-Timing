@@ -653,6 +653,7 @@ async function initTables(){
   `);
 
   // Seed default translations (idempotent)
+  // Only insert if the table has proper SERIAL id or if translation_key doesn't exist
   await pool.query(`
     INSERT INTO cms_translations (translation_key, category, no, en)
     VALUES
